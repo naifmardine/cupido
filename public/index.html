@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cupido — Dating CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login">
+  <form class="login-card" id="login-form">
+    <div class="login-logo">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="#fff"><path d="M12 20s-7-4.4-7-9.2C5 8 6.9 6.2 9.1 6.2c1.4 0 2.5.7 2.9 1.6.4-.9 1.5-1.6 2.9-1.6C17.1 6.2 19 8 19 10.8 19 15.6 12 20 12 20z"/></svg>
+    </div>
+    <h1>Cupido</h1>
+    <p class="sub">Entre pra acompanhar suas conquistas</p>
+    <div class="field">
+      <label>E-mail</label>
+      <input type="email" id="login-email" placeholder="voce@exemplo.com" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label>Senha</label>
+      <input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Entrar</button>
+    <div class="login-err" id="login-err"></div>
+  </form>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app" class="hidden">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M12 20s-7-4.4-7-9.2C5 8 6.9 6.2 9.1 6.2c1.4 0 2.5.7 2.9 1.6.4-.9 1.5-1.6 2.9-1.6C17.1 6.2 19 8 19 10.8 19 15.6 12 20 12 20z"/></svg></div>
+      <div><div class="brand-name">Cupido</div><div class="brand-sub">DATING CRM</div></div>
+    </div>
+    <div class="nav-label">GERAL</div>
+    <nav id="nav-geral">
+      <button class="nav-item active" data-view="dashboard">▦ Dashboard</button>
+      <button class="nav-item" data-view="roles">◆ Rolês</button>
+      <button class="nav-item" data-view="leads">◍ Leads</button>
+      <button class="nav-item" data-view="conversoes">♥ Conversões</button>
+    </nav>
+    <div class="nav-label">ANÁLISE</div>
+    <nav id="nav-analise">
+      <button class="nav-item" data-view="cantadas">❝ Cantadas</button>
+      <button class="nav-item" data-view="locais">⌖ Locais</button>
+      <button class="nav-item" data-view="config">⚙ Configurações</button>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="nav-item" id="btn-logout">⌁ Sair</button>
+      <div class="user-chip">
+        <div class="user-avatar">PI</div>
+        <div style="line-height:1.3"><div style="font-weight:700;font-size:13px">Pi</div>
+          <div style="font-size:11px;color:var(--text-3)">Solteiro convicto</div></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div style="min-width:0">
+        <div class="greeting" id="greeting">Bom dia, Pi</div>
+        <div class="greeting-sub" id="greeting-sub">Resumo da sua performance de conquistas</div>
+      </div>
+      <div class="topbar-right">
+        <div class="searchbox">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3-3"/></svg>
+          <input id="search" placeholder="Buscar lead, local, cantada…">
+        </div>
+        <div class="pill" id="today-pill">—</div>
+        <button class="icon-btn" id="theme-toggle" title="Alternar tema">◐</button>
+      </div>
+    </header>
+    <div class="content" id="view-root"><!-- app.js renderiza aqui --></div>
+  </main>
+</div>
+
+<button class="fab" id="fab" title="Adicionar abordagem" style="display:none">+</button>
+<div id="modal-root"></div>
+<div id="toast"></div>
+
+<script src="./charts.js"></script>
+<script src="./exif.js"></script>
+<script src="./bac.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>
