@@ -104,13 +104,18 @@
   }
 
   // ---------- NAV ----------
+  let vtAtiva = false;
   document.querySelectorAll('.nav-item[data-view]').forEach((btn) => btn.addEventListener('click', () => {
     const trocar = () => {
       state.view = btn.getAttribute('data-view');
       document.querySelectorAll('.nav-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
       render();
     };
-    if (document.startViewTransition) document.startViewTransition(trocar); else trocar(); // cross-fade estilo app
+    // cross-fade estilo app; sem transição concorrente (evita InvalidStateError em toques rápidos)
+    if (document.startViewTransition && !vtAtiva) {
+      vtAtiva = true;
+      document.startViewTransition(trocar).finished.finally(() => { vtAtiva = false; });
+    } else trocar();
   }));
   $('#theme-toggle').addEventListener('click', () => aplicarTema(temaAtual() === 'light' ? 'dark' : 'light'));
   $('#search').addEventListener('input', (e) => { state.busca = e.target.value.trim().toLowerCase(); if (state.view === 'leads' || state.view === 'conversoes') render(); });
@@ -119,6 +124,7 @@
   // ---------- RENDER ----------
   function render() {
     const root = $('#view-root');
+    if (!state.metrics) { root.innerHTML = '<div class="card"><div class="card-sub">Carregando…</div></div>'; return; }
     const v = state.view;
     if (v === 'dashboard') root.innerHTML = viewDashboard();
     else if (v === 'roles') root.innerHTML = viewRoles();
