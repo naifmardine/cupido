@@ -22,7 +22,10 @@ if (!AUTH_EMAIL || !AUTH_SENHA) console.warn('AVISO: AUTH_EMAIL/AUTH_SENHA não 
 // Sessão STATELESS (cookie assinado com HMAC) — funciona em serverless (Vercel) e
 // sobrevive a restart/instâncias. SESSION_SECRET deve ser fixo em produção.
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-if (!process.env.SESSION_SECRET) console.warn('AVISO: SESSION_SECRET não definido — sessões não sobrevivem a restart. Defina em produção.');
+if (!process.env.SESSION_SECRET) {
+  if (PROD) throw new Error('SESSION_SECRET é obrigatório em produção (sem ele a sessão quebra entre instâncias).');
+  console.warn('AVISO: SESSION_SECRET não definido — sessões não sobrevivem a restart. Defina em produção.');
+}
 const SESSAO_MAX_MS = 30 * 24 * 3600 * 1000; // 30 dias
 function assinarSessao(email) {
   const p = Buffer.from(JSON.stringify({ u: email, iat: Date.now() })).toString('base64url');

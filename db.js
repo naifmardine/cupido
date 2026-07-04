@@ -7,9 +7,10 @@ const { Pool } = require('pg');
 
 const TZ = '-c timezone=America/Sao_Paulo';
 
+// max baixo: em serverless cada instância mantém seu pool; evita estourar conexões do Neon
 const pool = new Pool(
   process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: true }, options: TZ }
+    ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: true }, options: TZ, max: 3 }
     : {
         host: process.env.PGHOST || 'localhost',
         port: Number(process.env.PGPORT) || 5432,
@@ -17,6 +18,7 @@ const pool = new Pool(
         password: process.env.PGPASSWORD || '',
         database: process.env.PGDATABASE || 'cupido',
         options: TZ,
+        max: 3,
       }
 );
 
