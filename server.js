@@ -1,5 +1,7 @@
 // Cupido — servidor Express (API REST + auth). Modelo: rolê -> leads + consumo.
 require('dotenv').config();
+// fuso do processo em BRT (host serverless roda em UTC) — casa com a data "de hoje"/AO VIVO
+process.env.TZ = process.env.TZ || 'America/Sao_Paulo';
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
