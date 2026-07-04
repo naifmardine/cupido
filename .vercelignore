@@ -1,0 +1,10 @@
+node_modules
+uploads
+.env
+.git
+*.log
+Dockerfile
+.dockerignore
+render.yaml
+setup.bat
+Iniciar Cupido.bat

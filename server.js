@@ -16,7 +16,28 @@ app.set('trust proxy', 1); // atrás do proxy https do host (cookie secure funci
 const AUTH_EMAIL = process.env.AUTH_EMAIL;
 const AUTH_SENHA = process.env.AUTH_SENHA;
 if (!AUTH_EMAIL || !AUTH_SENHA) console.warn('AVISO: AUTH_EMAIL/AUTH_SENHA não definidos — login vai negar tudo. Defina no .env.');
-const sessions = new Set();
+
+// Sessão STATELESS (cookie assinado com HMAC) — funciona em serverless (Vercel) e
+// sobrevive a restart/instâncias. SESSION_SECRET deve ser fixo em produção.
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) console.warn('AVISO: SESSION_SECRET não definido — sessões não sobrevivem a restart. Defina em produção.');
+const SESSAO_MAX_MS = 30 * 24 * 3600 * 1000; // 30 dias
+function assinarSessao(email) {
+  const p = Buffer.from(JSON.stringify({ u: email, iat: Date.now() })).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(p).digest('base64url');
+  return `${p}.${sig}`;
+}
+function lerSessao(token) {
+  if (!token || !token.includes('.')) return null;
+  const [p, sig] = token.split('.');
+  const esperado = crypto.createHmac('sha256', SESSION_SECRET).update(p).digest('base64url');
+  const a = Buffer.from(sig), b = Buffer.from(esperado);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const d = JSON.parse(Buffer.from(p, 'base64url').toString());
+    return (Date.now() - d.iat) < SESSAO_MAX_MS ? d : null;
+  } catch (e) { return null; }
+}
 
 const STATUS_VALIDOS = new Set(['convertida', 'em_conversa', 'fora']);
 const manter = (v) => (v === undefined || v === null || v === '') ? null : v;
@@ -42,26 +63,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- auth ----
 function requireAuth(req, res, next) {
-  const tok = req.cookies && req.cookies.cupido_sess;
-  if (tok && sessions.has(tok)) return next();
+  if (lerSessao(req.cookies && req.cookies.cupido_sess)) return next();
   return res.status(401).json({ error: 'nao_autenticado' });
 }
 app.post('/api/login', (req, res) => {
   const { email, password } = req.body || {};
   if (AUTH_EMAIL && AUTH_SENHA && email === AUTH_EMAIL && password === AUTH_SENHA) {
-    const tok = crypto.randomBytes(24).toString('hex');
-    sessions.add(tok);
-    res.cookie('cupido_sess', tok, { httpOnly: true, sameSite: 'lax', secure: PROD });
+    res.cookie('cupido_sess', assinarSessao(email), {
+      httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: SESSAO_MAX_MS });
     return res.json({ ok: true });
   }
   return res.status(401).json({ error: 'credencial_invalida' });
 });
-app.post('/api/logout', (req, res) => {
-  const tok = req.cookies && req.cookies.cupido_sess;
-  if (tok) sessions.delete(tok);
-  res.clearCookie('cupido_sess');
-  res.json({ ok: true });
-});
+app.post('/api/logout', (_req, res) => { res.clearCookie('cupido_sess'); res.json({ ok: true }); });
 app.get('/api/me', requireAuth, (_req, res) => res.json({ email: AUTH_EMAIL }));
 app.get('/health', (_req, res) => res.type('text').send('ok'));
 
@@ -522,4 +536,9 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
 // fallback SPA
 app.get(/^\/(?!api|uploads).*/, (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((err, _req, res, _next) => { console.error(err); res.status(500).json({ error: 'erro_interno' }); });
-app.listen(PORT, () => console.log(`\n  Cupido rodando em  http://localhost:${PORT}\n`));
+
+// Local: sobe o servidor. Serverless (Vercel): exporta o app como handler.
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`\n  Cupido rodando em  http://localhost:${PORT}\n`));
+}
+module.exports = app;
