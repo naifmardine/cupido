@@ -8,6 +8,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const { query } = require('./db');
+const stats = require('./stats');
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3100;
@@ -47,6 +48,7 @@ function lerSessao(token) {
 const STATUS_VALIDOS = new Set(['convertida', 'em_conversa', 'fora']);
 const manter = (v) => (v === undefined || v === null || v === '') ? null : v;
 const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+const dataOuNull = (v) => { const d = new Date(v); return isNaN(d.getTime()) ? null : d; }; // Date válida ou null
 // fuso explícito nas queries — robusto mesmo se a sessão do banco não estiver em BRT (ex.: pooler)
 const TZBR = "'America/Sao_Paulo'";
 const HOJE_BR = `(now() AT TIME ZONE ${TZBR})::date`;        // "hoje" em Brasília
@@ -141,7 +143,18 @@ async function resolveRole(b) {
   return rows[0].id;
 }
 
-// resumo de um rolê: bebidas, doses, total de gramas e BAC (Widmark)
+// BAC (Widmark) num instante t (epoch ms), integrando cada bebida pelo SEU horário.
+// eventos: [{ ms, gramas }] ordenados; eliminação BETA corre do 1º gole até t.
+function bacNoInstante(eventos, pesoKg, rFac, t) {
+  if (!eventos.length || pesoKg <= 0 || rFac <= 0) return 0;
+  const consumidos = eventos.filter((e) => e.ms <= t);
+  if (!consumidos.length) return 0;
+  const gramas = consumidos.reduce((s, e) => s + e.gramas, 0);
+  const horas = Math.max(0, (t - eventos[0].ms) / 3600000);
+  return Math.max(0, gramas / (rFac * pesoKg) - BETA * horas);
+}
+
+// resumo de um rolê: bebidas (agregado), linha do tempo individual, curva de BAC e BAC atual
 async function resumoRole(roleId) {
   const rq = await query(
     `SELECT r.id, r.data::text AS data, r.local_id, lo.nome AS local, r.titulo,
@@ -150,30 +163,40 @@ async function resumoRole(roleId) {
   if (!rq.rows.length) return null;
   const role = rq.rows[0];
   const cfg = (await query(`SELECT peso_kg, r FROM configuracoes WHERE id = 1`)).rows[0] || { peso_kg: 75, r: 0.68 };
-  const itensQ = await query(
-    `SELECT b.id AS bebida_id, b.nome, b.ml, b.abv, count(*)::int AS qtd,
-            min(c.momento) AS primeiro, max(c.momento) AS ultimo
-       FROM consumo c JOIN bebidas b ON b.id = c.bebida_id
-      WHERE c.role_id = $1 GROUP BY b.id, b.nome, b.ml, b.abv ORDER BY b.ordem`, [roleId]);
-  let totalGramas = 0, doses = 0, primeiro = null, ultimo = null;
-  const itens = itensQ.rows.map((r) => {
-    const gramas = r.ml * (Number(r.abv) / 100) * DENS_ETANOL * r.qtd;
-    totalGramas += gramas; doses += r.qtd;
-    const p = new Date(r.primeiro), u = new Date(r.ultimo);
-    if (!primeiro || p < primeiro) primeiro = p;
-    if (!ultimo || u > ultimo) ultimo = u;
-    return { bebida_id: r.bebida_id, nome: r.nome, ml: r.ml, abv: Number(r.abv), qtd: r.qtd, gramas: +gramas.toFixed(1) };
-  });
   const pesoKg = Number(cfg.peso_kg), rFac = Number(cfg.r);
-  const aoVivo = role.ao_vivo === true; // "hoje" vem do banco (BRT), não do relógio do servidor
-  let horas = 0;
-  if (primeiro) {
-    const ref = aoVivo ? new Date() : (ultimo || primeiro);
-    horas = Math.max(0, (ref - primeiro) / 3600000);
+  // cada consumo é uma linha (com seu horário) — base da curva temporal e da edição
+  const linhaQ = await query(
+    `SELECT c.id, c.bebida_id, c.momento, b.nome, b.ml, b.abv, b.ordem
+       FROM consumo c JOIN bebidas b ON b.id = c.bebida_id
+      WHERE c.role_id = $1 ORDER BY c.momento ASC, c.id ASC`, [roleId]);
+  const linha = linhaQ.rows.map((r) => ({
+    id: r.id, bebida_id: r.bebida_id, nome: r.nome, ml: r.ml, abv: Number(r.abv),
+    momento: r.momento, gramas: +(r.ml * (Number(r.abv) / 100) * DENS_ETANOL).toFixed(1),
+  }));
+  const eventos = linha
+    .map((r) => ({ ms: new Date(r.momento).getTime(), gramas: r.ml * (r.abv / 100) * DENS_ETANOL }))
+    .sort((a, b) => a.ms - b.ms);
+  // agregado por bebida (pros chips de quick-add)
+  const byBev = {};
+  for (const r of linha) {
+    if (!byBev[r.bebida_id]) byBev[r.bebida_id] = { bebida_id: r.bebida_id, nome: r.nome, ml: r.ml, abv: r.abv, ordem: r.ordem, qtd: 0, gramas: 0 };
+    byBev[r.bebida_id].qtd += 1; byBev[r.bebida_id].gramas += r.gramas;
   }
-  const bruto = pesoKg > 0 ? totalGramas / (rFac * pesoKg) : 0;
-  const bac = Math.max(0, bruto - BETA * horas);
-  return { role, itens, totalGramas: +totalGramas.toFixed(1), doses, bac: +bac.toFixed(2), aoVivo };
+  const itens = Object.values(byBev).sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+    .map((i) => ({ bebida_id: i.bebida_id, nome: i.nome, ml: i.ml, abv: i.abv, qtd: i.qtd, gramas: +i.gramas.toFixed(1) }));
+  const doses = linha.length;
+  const totalGramas = +eventos.reduce((s, e) => s + e.gramas, 0).toFixed(1);
+  const aoVivo = role.ao_vivo === true; // "hoje" vem do banco (BRT), não do relógio do servidor
+  const refT = eventos.length ? (aoVivo ? Date.now() : eventos[eventos.length - 1].ms) : Date.now();
+  const bac = +bacNoInstante(eventos, pesoKg, rFac, refT).toFixed(2);
+  // curva amostrada: 0 antes do 1º gole, BAC logo após cada bebida, e no instante de referência
+  const curva = [];
+  if (eventos.length) {
+    curva.push({ t: new Date(eventos[0].ms).toISOString(), bac: 0 });
+    for (const e of eventos) curva.push({ t: new Date(e.ms).toISOString(), bac: +bacNoInstante(eventos, pesoKg, rFac, e.ms).toFixed(3) });
+    if (refT > eventos[eventos.length - 1].ms) curva.push({ t: new Date(refT).toISOString(), bac });
+  }
+  return { role, itens, linha, curva, totalGramas, doses, bac, aoVivo };
 }
 
 // ---- CONFIGURAÇÕES ----
@@ -385,8 +408,36 @@ app.post('/api/consumo', requireAuth, async (req, res, next) => {
     const roleId = posInt(req.body && req.body.role_id);
     const bebidaId = posInt(req.body && req.body.bebida_id);
     if (!roleId || !bebidaId) return res.status(400).json({ error: 'dados_invalidos' });
-    await query(`INSERT INTO consumo (role_id, bebida_id) VALUES ($1,$2)`, [roleId, bebidaId]);
+    // momento = hora real do toque (cliente manda ISO); default now() se ausente; 400 se inválido
+    let momento = new Date();
+    if (req.body && req.body.momento) {
+      momento = dataOuNull(req.body.momento);
+      if (!momento) return res.status(400).json({ error: 'momento_invalido' });
+    }
+    await query(`INSERT INTO consumo (role_id, bebida_id, momento) VALUES ($1,$2,$3)`, [roleId, bebidaId, momento]);
     res.status(201).json(await resumoRole(roleId));
+  } catch (e) { next(e); }
+});
+// editar o horário de uma bebida específica (curva de álcool precisa)
+app.put('/api/consumo/:id', requireAuth, async (req, res, next) => {
+  try {
+    const id = posInt(req.params.id);
+    if (!id || !req.body || !req.body.momento) return res.status(400).json({ error: 'dados_invalidos' });
+    const momento = dataOuNull(req.body.momento);
+    if (!momento) return res.status(400).json({ error: 'momento_invalido' });
+    const { rows } = await query(`UPDATE consumo SET momento=$1 WHERE id=$2 RETURNING role_id`, [momento, id]);
+    if (!rows.length) return res.status(404).json({ error: 'nao_encontrado' });
+    res.json(await resumoRole(rows[0].role_id));
+  } catch (e) { next(e); }
+});
+// excluir uma bebida específica pelo id (a timeline precisa remover linha exata)
+app.delete('/api/consumo/:id', requireAuth, async (req, res, next) => {
+  try {
+    const id = posInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'dados_invalidos' });
+    const { rows } = await query(`DELETE FROM consumo WHERE id=$1 RETURNING role_id`, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'nao_encontrado' });
+    res.json(await resumoRole(rows[0].role_id));
   } catch (e) { next(e); }
 });
 app.post('/api/consumo/remover', requireAuth, async (req, res, next) => {
@@ -631,6 +682,144 @@ app.get('/api/inteligencia', requireAuth, async (_req, res, next) => {
       comSemObjecao: comSem.rows.map((r) => ({ teve: r.teve, total: r.total, convertidas: r.convertidas, taxa: taxaDe(r) })),
       porDia: porDia.rows.map((r) => ({ dow: Number(r.dow), total: r.total, convertidas: r.convertidas, taxa: taxaDe(r) })),
     });
+  } catch (e) { next(e); }
+});
+
+// ---- ANÁLISE ESTATÍSTICA (regressão/correlação, múltiplas óticas) ----
+app.get('/api/analise', requireAuth, async (_req, res, next) => {
+  try {
+    const cfg = (await query(`SELECT peso_kg, r FROM configuracoes WHERE id=1`)).rows[0] || { peso_kg: 75, r: 0.68 };
+    const pesoKg = Number(cfg.peso_kg), rFac = Number(cfg.r);
+    // leads com features (instante absoluto em ms + hora/dow em BRT)
+    const leadsQ = await query(`
+      SELECT l.id, l.role_id, l.cantada_id, l.caracteristica,
+             (EXTRACT(EPOCH FROM l.momento)*1000)::float8 AS mom_ms,
+             ${HORA_BR('l.momento')} AS hora,
+             EXTRACT(DOW FROM l.momento AT TIME ZONE ${TZBR})::int AS dow,
+             (l.status='convertida') AS convertida,
+             (l.objecao IS NOT NULL AND l.objecao<>'') AS teve_obj,
+             CASE WHEN l.convertida_em IS NULL OR l.convertida_em<=l.momento THEN NULL
+                  ELSE EXTRACT(EPOCH FROM (l.convertida_em - l.momento))/60.0 END AS lt_min,
+             r.local_id
+        FROM leads l JOIN roles r ON r.id=l.role_id`);
+    // consumo por rolê (instante + gramas) pra reconstruir o BAC no momento de cada abordagem
+    const consQ = await query(`
+      SELECT c.role_id, (EXTRACT(EPOCH FROM c.momento)*1000)::float8 AS ms, b.ml, b.abv
+        FROM consumo c JOIN bebidas b ON b.id=c.bebida_id`);
+    const eventosPorRole = {}, dosesPorRole = {};
+    for (const c of consQ.rows) {
+      (eventosPorRole[c.role_id] = eventosPorRole[c.role_id] || []).push({ ms: Number(c.ms), gramas: c.ml * (Number(c.abv) / 100) * DENS_ETANOL });
+    }
+    for (const k in eventosPorRole) eventosPorRole[k].sort((a, b) => a.ms - b.ms);
+
+    const M = leadsQ.rows.map((l) => {
+      const ev = eventosPorRole[l.role_id] || [];
+      const t = Number(l.mom_ms);
+      return {
+        conv: l.convertida ? 1 : 0,
+        // doses ATÉ o momento da abordagem (coerente com o BAC; sem vazar bebidas posteriores)
+        doses: ev.filter((e) => e.ms <= t).length,
+        hora: Number(l.hora),
+        dow: Number(l.dow),
+        bac: +bacNoInstante(ev, pesoKg, rFac, Number(l.mom_ms)).toFixed(3),
+        teveObj: l.teve_obj ? 1 : 0,
+        ltMin: l.lt_min != null ? Number(l.lt_min) : null,
+        local: l.local_id, cantada: l.cantada_id, carac: l.caracteristica,
+      };
+    });
+    const n = M.length;
+    const nConv = M.filter((m) => m.conv === 1).length;
+    const amostraPequena = n < 30 || nConv < 8 || (n - nConv) < 8;
+    const y = M.map((m) => m.conv);
+
+    // fatores numéricos candidatos (só usa os com variação)
+    const FATORES = [
+      { key: 'bac', label: 'Álcool no momento (BAC)' },
+      { key: 'doses', label: 'Doses no rolê' },
+      { key: 'hora', label: 'Horário (hora do dia)' },
+      { key: 'teveObj', label: 'Houve objeção' },
+    ];
+    const temVar = (k) => { const v = M.map((m) => m[k]); return new Set(v).size > 1; };
+    const usaveis = FATORES.filter((f) => temVar(f.key));
+
+    // 1) CORRELAÇÃO (point-biserial de cada fator com conversão)
+    const correlacoes = usaveis.map((f) => {
+      const r = stats.pointBiserial(M.map((m) => m[f.key]), y);
+      return { fator: f.key, label: f.label, r: +r.r.toFixed(3), p: +r.p.toFixed(4), n: r.n, signif: r.p < 0.05 };
+    }).sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+
+    // 2) LOGÍSTICA UNIVARIADA por fator
+    const logisticaUni = usaveis.map((f) => {
+      const g = stats.logreg(M.map((m) => [m[f.key]]), y);
+      if (!g) return null;
+      return {
+        fator: f.key, label: f.label, coef: +g.coef[1].toFixed(3), oddsRatio: +g.oddsRatio[1].toFixed(3),
+        p: +g.p[1].toFixed(4), mcfaddenR2: +g.mcfaddenR2.toFixed(3), n: g.n, converged: g.converged, signif: g.p[1] < 0.05,
+      };
+    }).filter(Boolean).sort((a, b) => b.mcfaddenR2 - a.mcfaddenR2);
+
+    // 3) LOGÍSTICA MÚLTIPLA (todos os numéricos juntos — efeito "controlando os demais")
+    let logisticaMulti = null;
+    const numKeys = usaveis.map((f) => f.key);
+    if (n > numKeys.length + 1) {
+      const g = stats.logreg(M.map((m) => numKeys.map((k) => m[k])), y, { ridge: 1e-2 });
+      if (g) logisticaMulti = {
+        fatores: numKeys, mcfaddenR2: +g.mcfaddenR2.toFixed(3), n: g.n, converged: g.converged,
+        termos: usaveis.map((f, i) => ({
+          fator: f.key, label: f.label, coef: +g.coef[i + 1].toFixed(3), oddsRatio: +g.oddsRatio[i + 1].toFixed(3),
+          p: +g.p[i + 1].toFixed(4), signif: g.p[i + 1] < 0.05,
+        })),
+      };
+    }
+
+    // 4) LINEAR (outra ótica, alvo contínuo): tempo até conquistar ~ álcool + horário
+    let linear = null;
+    const conv = M.filter((m) => m.ltMin != null);
+    if (conv.length > 3) {
+      const lr = stats.linreg(conv.map((m) => [m.bac, m.hora]), conv.map((m) => m.ltMin));
+      if (lr) linear = {
+        alvo: 'Tempo até conquistar (min)', r2: +lr.r2.toFixed(3), adjR2: +lr.adjR2.toFixed(3), n: lr.n,
+        termos: [{ label: 'Álcool (BAC)', coef: +lr.coef[1].toFixed(2), p: +lr.p[1].toFixed(4), signif: lr.p[1] < 0.05 },
+                 { label: 'Horário', coef: +lr.coef[2].toFixed(2), p: +lr.p[2].toFixed(4), signif: lr.p[2] < 0.05 }],
+      };
+    }
+
+    // 5) CATEGÓRICOS: Cramér's V (associação com conversão)
+    const cramer = (keyFn, label) => {
+      const cats = [...new Set(M.map(keyFn).filter((v) => v != null))];
+      if (cats.length < 2) return null;
+      const table = cats.map((c) => {
+        const sub = M.filter((m) => keyFn(m) === c);
+        return [sub.filter((m) => m.conv === 1).length, sub.filter((m) => m.conv === 0).length];
+      });
+      const cv = stats.cramersV(table);
+      return { fator: label, v: +cv.v.toFixed(3), p: +cv.p.toFixed(4), n: cv.n, signif: cv.p < 0.05 };
+    };
+    const categoricos = [
+      cramer((m) => m.local, 'Local'), cramer((m) => m.cantada, 'Cantada'), cramer((m) => m.carac, 'Característica'),
+    ].filter(Boolean).sort((a, b) => b.v - a.v);
+
+    // 6) CURVA DE TENDÊNCIA (logística) pro fator numérico mais forte (por |r|)
+    let tendencia = null;
+    const numericos = correlacoes.filter((c) => c.fator !== 'teveObj');
+    if (numericos.length) {
+      const f = numericos[0];
+      const g = stats.logreg(M.map((m) => [m[f.fator]]), y);
+      if (g && g.converged) {
+        const xs = M.map((m) => m[f.fator]);
+        const lo = Math.min(...xs), hi = Math.max(...xs);
+        const pontos = [];
+        const steps = 24;
+        for (let i = 0; i <= steps; i++) { const x = lo + (hi - lo) * i / steps; pontos.push({ x: +x.toFixed(2), p: +stats.logregPredict(g.coef, [x]).toFixed(3) }); }
+        tendencia = {
+          fator: f.fator, label: f.label,
+          observados: M.map((m) => ({ x: m[f.fator], y: m.conv })),
+          pontos, mcfaddenR2: +g.mcfaddenR2.toFixed(3),
+        };
+      }
+    }
+
+    res.json({ n, nConvertidas: nConv, amostraPequena, correlacoes, logisticaUni, logisticaMulti, linear, categoricos, tendencia });
   } catch (e) { next(e); }
 });
 

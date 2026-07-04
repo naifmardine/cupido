@@ -51,6 +51,7 @@
     </div>
     <div class="nav-label">GERAL</div>
     <nav id="nav-geral">
+      <button class="nav-item" data-view="hoje"><span class="ic">🔥</span><span class="lbl">Hoje</span></button>
       <button class="nav-item active" data-view="dashboard"><span class="ic">▦</span><span class="lbl">Dashboard</span></button>
       <button class="nav-item" data-view="roles"><span class="ic">◆</span><span class="lbl">Rolês</span></button>
       <button class="nav-item" data-view="leads"><span class="ic">◍</span><span class="lbl">Leads</span></button>
@@ -75,6 +76,7 @@
 
   <main class="main">
     <header class="topbar">
+      <button class="menu-btn" id="btn-menu" title="Menu" aria-label="Abrir menu">☰</button>
       <div style="min-width:0">
         <div class="greeting" id="greeting">Bom dia, Pi</div>
         <div class="greeting-sub" id="greeting-sub">Resumo da sua performance de conquistas</div>
@@ -90,6 +92,30 @@
     </header>
     <div class="content" id="view-root"><!-- app.js renderiza aqui --></div>
   </main>
+
+  <!-- Menu mobile (folha) — 5 categorias simplificadas pra uso rápido -->
+  <div id="nav-sheet" class="nav-sheet hidden" aria-hidden="true">
+    <div class="nav-sheet-backdrop" id="nav-sheet-backdrop"></div>
+    <div class="nav-sheet-panel" role="dialog" aria-label="Menu">
+      <div class="nav-sheet-head"><span class="brand-name">Cupido</span><button class="icon-btn" id="nav-sheet-close" aria-label="Fechar">✕</button></div>
+      <button class="sheet-item" data-view="hoje"><span class="ic">🔥</span><div><div class="sheet-t">Hoje</div><div class="sheet-d">O rolê ao vivo: álcool + abordagens</div></div></button>
+      <button class="sheet-item" data-view="dashboard"><span class="ic">▦</span><div><div class="sheet-t">Painel</div><div class="sheet-d">Visão geral e metas</div></div></button>
+      <button class="sheet-item" data-view="inteligencia"><span class="ic">◎</span><div><div class="sheet-t">Análise</div><div class="sheet-d">Insights, regressão e correlações</div></div></button>
+      <div class="sheet-group">Histórico</div>
+      <div class="sheet-sub">
+        <button class="sheet-chip" data-view="leads">Leads</button>
+        <button class="sheet-chip" data-view="conversoes">Conversões</button>
+        <button class="sheet-chip" data-view="roles">Rolês</button>
+      </div>
+      <div class="sheet-group">Ajustes</div>
+      <div class="sheet-sub">
+        <button class="sheet-chip" data-view="cantadas">Cantadas</button>
+        <button class="sheet-chip" data-view="locais">Locais</button>
+        <button class="sheet-chip" data-view="config">Perfil &amp; Bebidas</button>
+      </div>
+      <button class="sheet-item sheet-logout" id="btn-logout-2"><span class="ic">⌁</span><div><div class="sheet-t">Sair</div></div></button>
+    </div>
+  </div>
 </div>
 
 <button class="fab" id="fab" title="Adicionar abordagem" style="display:none">+</button>

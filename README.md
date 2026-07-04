@@ -31,23 +31,35 @@ A credencial é definida por variáveis de ambiente **`AUTH_EMAIL`** e **`AUTH_S
 (no `.env` local e no host de produção). Não fica no código nem neste repositório.
 
 ## Como usar
+- **Hoje** → a tela de uso rápido no rolê: BAC ao vivo, **curva de álcool da noite** (montada pelo
+  horário real de cada bebida), timeline de bebidas com **hora editável**, e as abordagens da noite.
+  "+ Bebida" registra a dose na hora do toque; toque na hora pra ajustar quando bebeu.
 - Botão **+** → registrar uma abordagem. Escolha (ou crie) o **rolê**, tire/escolha a **foto**
   (no celular, "Tirar foto" abre a câmera), defina característica/status, escreva ou escolha a
-  **cantada** (opcional), e some as **bebidas do rolê** com os botões +/− — o **BAC atualiza ao
-  vivo**. Foto JPEG de câmera preenche o horário pelo **EXIF**; prints/WhatsApp caem na data do
-  arquivo (sempre editável).
-- **Rolês** → cada saída com seus leads e bebidas (criar/editar/excluir).
-- **Leads / Conversões** → tabela com editar/excluir. **Cantadas** e **Locais** → catálogos.
-- **Configurações** → peso, sexo (fator de Widmark) e meta do mês; catálogo de bebidas editável.
-  Mudar o peso recalcula o BAC.
-- Card **Álcool no Rolê** → seletor de data mostra o BAC de qualquer rolê ("AO VIVO" só hoje);
-  "+ Bebida" adiciona doses. As demais métricas (KPIs, gráficos, "melhor horário") saem dos dados.
-- Botão **◐** no topo alterna tema claro/escuro.
+  **cantada** (opcional), a **objeção** (select com opção de adicionar nova via ＋). Foto JPEG de
+  câmera preenche o horário pelo **EXIF**; prints/WhatsApp caem na data do arquivo (editável).
+- **Leads / Conversões** → tabela com editar/excluir; **clique no status** pra alterná-lo em 1 toque.
+- **Inteligência** → funil, objeções, cortes por cantada/local, insights auto-gerados e uma seção de
+  **análise estatística**: correlações (com p-valor), **regressão logística** uni e múltipla (coef,
+  odds ratio, pseudo-R²), regressão linear, Cramér's V e **curva de tendência**. Rotulada com aviso de
+  amostra pequena e "correlação ≠ causa" — o poder analítico cresce conforme você registra mais.
+- **Rolês / Cantadas / Locais / Config** → catálogos e perfil (peso/sexo Widmark, meta, bebidas).
+- **Mobile**: botão **☰** no topo abre o menu com 5 categorias (Hoje, Painel, Análise, Histórico,
+  Ajustes). Botão **◐** alterna tema claro/escuro.
 
 ## Cálculo do álcool (BAC)
-Estimativa **lúdica** por Widmark: `gramas = ml × %abv/100 × 0,789`;
-`BAC = max(0, Σgramas / (r × peso) − 0,15 × horas)`, `r` = 0,68 (homem) / 0,55 (mulher).
-Não é medição real — não use pra decidir se pode dirigir.
+Estimativa **lúdica** por Widmark, **integrada no tempo**: cada bebida entra pelo seu horário
+(`consumo.momento`) e a eliminação (`0,15 g/L·h`) corre do primeiro gole. `gramas = ml × %abv/100 ×
+0,789`; `BAC(t) = max(0, Σ_{bebidas até t} gramas / (r × peso) − 0,15 × horas)`, `r` = 0,68 (homem) /
+0,55 (mulher). Isso gera a **curva de álcool da noite** e permite calcular o BAC no momento de cada
+abordagem (usado na análise). Não é medição real — não use pra decidir se pode dirigir.
+
+## Análise estatística (`stats.js`)
+Módulo **vanilla, zero dependência**: correlação de Pearson/point-biserial (t-test), regressão linear
+OLS (equações normais, R²/erros-padrão/p), **regressão logística** por IRLS com ridge (coeficientes,
+odds ratio, p de Wald, pseudo-R² de McFadden), intervalo de Wilson e Cramér's V. p-values via beta
+incompleta (t) e função erro (normal). `GET /api/analise` monta a matriz por-lead e roda as óticas.
+Tem auto-teste: `node stats.js` valida contra valores conhecidos.
 
 ## Stack
 Node + Express + PostgreSQL (`pg`) no Neon, frontend HTML/CSS/JS puro (charts em SVG).

@@ -103,5 +103,57 @@
     </svg>`;
   }
 
-  window.Charts = { speedo, metaGauge, donut, lineChart };
+  // Dispersão + curva de tendência (regressão logística). observados=[{x,y0/1}],
+  // pontos=[{x,p}] (probabilidade prevista). Eixo Y = probabilidade de conversão.
+  function scatterTrend(observados, pontos, xLabel) {
+    const xs = (observados || []).map((o) => o.x).concat((pontos || []).map((p) => p.x));
+    if (!xs.length) return '';
+    const W = 680, H = 275, l = 44, rp = 16, tp = 16, bp = 46, pw = W - l - rp, ph = H - tp - bp;
+    const xmin = Math.min(...xs), xmax = Math.max(...xs), span = (xmax - xmin) || 1;
+    const X = (x) => l + pw * ((x - xmin) / span);
+    const Y = (p) => tp + ph * (1 - Math.max(0, Math.min(1, p)));
+    const grid = [0, 0.5, 1].map((g) =>
+      `<line x1="${l}" y1="${Y(g)}" x2="${W - rp}" y2="${Y(g)}" stroke="var(--border-2)" stroke-width="1"/>
+       <text x="${l - 8}" y="${(Y(g) + 4).toFixed(1)}" text-anchor="end" font-size="13" fill="var(--text-3)" font-family="Space Grotesk">${Math.round(g * 100)}%</text>`).join('');
+    const cpath = (pontos || []).map((p, i) => `${i ? 'L' : 'M'} ${X(p.x).toFixed(1)} ${Y(p.p).toFixed(1)}`).join(' ');
+    const dots = (observados || []).map((o) =>
+      `<circle cx="${X(o.x).toFixed(1)}" cy="${Y(o.y).toFixed(1)}" r="5.5" fill="${o.y ? 'var(--good)' : 'var(--danger)'}" opacity="0.5"/>`).join('');
+    const xl = [xmin, (xmin + xmax) / 2, xmax].map((v) =>
+      `<text x="${X(v).toFixed(1)}" y="${H - 26}" text-anchor="middle" font-size="13" fill="var(--text-3)">${+v.toFixed(1)}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      ${grid}
+      <path d="${cpath}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round"/>
+      ${dots}${xl}
+      <text x="${(l + W - rp) / 2}" y="${H - 6}" text-anchor="middle" font-size="12.5" fill="var(--text-2)">${xLabel || ''}</text>
+    </svg>`;
+  }
+
+  // Curva de álcool (BAC) ao longo do rolê. curva=[{t: ISO, bac}].
+  function bacCurve(curva) {
+    const c = (curva || []).map((p) => ({ ms: new Date(p.t).getTime(), bac: p.bac }));
+    if (c.length < 2) return '';
+    const W = 680, H = 200, l = 40, rp = 16, tp = 14, bp = 34, pw = W - l - rp, ph = H - tp - bp;
+    const t0 = c[0].ms, t1 = c[c.length - 1].ms, span = (t1 - t0) || 1;
+    const maxB = Math.max(0.1, ...c.map((p) => p.bac)) * 1.15;
+    const X = (ms) => l + pw * ((ms - t0) / span);
+    const Y = (b) => tp + ph * (1 - b / maxB);
+    const path = c.map((p, i) => `${i ? 'L' : 'M'} ${X(p.ms).toFixed(1)} ${Y(p.bac).toFixed(1)}`).join(' ');
+    const area = path + ` L ${X(t1).toFixed(1)} ${Y(0).toFixed(1)} L ${X(t0).toFixed(1)} ${Y(0).toFixed(1)} Z`;
+    const fmt = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+    const yg = [0, maxB / 2, maxB].map((g) =>
+      `<line x1="${l}" y1="${Y(g)}" x2="${W - rp}" y2="${Y(g)}" stroke="var(--border-2)" stroke-width="1"/>
+       <text x="${l - 6}" y="${(Y(g) + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="var(--text-3)" font-family="Space Grotesk">${g.toFixed(1)}</text>`).join('');
+    const labels = [t0, (t0 + t1) / 2, t1].map((ms) =>
+      `<text x="${X(ms).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="12" fill="var(--text-3)">${fmt(ms)}</text>`).join('');
+    return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+      <defs><linearGradient id="baccfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.24"/><stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+      ${yg}
+      <path d="${area}" fill="url(#baccfill)" stroke="none"/>
+      <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      ${labels}
+    </svg>`;
+  }
+
+  window.Charts = { speedo, metaGauge, donut, lineChart, scatterTrend, bacCurve };
 })();

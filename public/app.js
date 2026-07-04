@@ -91,15 +91,22 @@
 
   // ---------- DADOS ----------
   async function recarregar() {
-    const [metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes] = await Promise.all([
+    const [metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes, analise] = await Promise.all([
       api('/api/metrics'), api('/api/leads'), api('/api/cantadas'),
       api('/api/locais'), api('/api/bebidas'), api('/api/configuracoes'), api('/api/roles'),
       api('/api/inteligencia'), api('/api/objecoes'),
+      api('/api/analise').catch(() => null), // análise é secundária: falha nela não derruba o app
     ]);
-    Object.assign(state, { metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes });
+    Object.assign(state, { metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes, analise });
     if (!state.alcoolRoleId || !roles.find((r) => r.id === state.alcoolRoleId))
       state.alcoolRoleId = (metrics.alcool && metrics.alcool.role_id) || (roles[0] && roles[0].id) || null;
     state.alcoolResumo = state.alcoolRoleId ? await api('/api/consumo?role_id=' + state.alcoolRoleId) : null;
+    // resumo dedicado do rolê AO VIVO pra tela Hoje (independe do seletor do dashboard)
+    const live = roles.find((r) => r.aoVivo);
+    state.hojeResumo = live
+      ? (state.alcoolResumo && state.alcoolResumo.role && state.alcoolResumo.role.id === live.id
+          ? state.alcoolResumo : await api('/api/consumo?role_id=' + live.id))
+      : null;
   }
   async function iniciarApp() { mostrarApp(); await recarregar(); montarTopo(); render(); }
   // executa uma mutação, recarrega e re-renderiza; distingue "falhou ao salvar" de "salvou mas falhou o refresh"
@@ -125,18 +132,33 @@
 
   // ---------- NAV ----------
   let vtAtiva = false;
-  document.querySelectorAll('.nav-item[data-view]').forEach((btn) => btn.addEventListener('click', () => {
+  function irParaView(view) {
+    if (!view) return;
     const trocar = () => {
-      state.view = btn.getAttribute('data-view');
-      document.querySelectorAll('.nav-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
+      state.view = view;
+      // sincroniza estado ativo em TODOS os itens (sidebar + folha) pelo data-view
+      document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-view') === view));
       render();
     };
-    // cross-fade estilo app; sem transição concorrente (evita InvalidStateError em toques rápidos)
     if (document.startViewTransition && !vtAtiva) {
       vtAtiva = true;
-      document.startViewTransition(trocar).finished.finally(() => { vtAtiva = false; });
+      // .catch swallows a rejeição de transição abortada (toque rápido) — evita ruído no console
+      document.startViewTransition(trocar).finished.catch(() => {}).finally(() => { vtAtiva = false; });
     } else trocar();
-  }));
+  }
+  document.querySelectorAll('.sidebar .nav-item[data-view]').forEach((btn) =>
+    btn.addEventListener('click', () => irParaView(btn.getAttribute('data-view'))));
+  // menu mobile (folha)
+  const navSheet = $('#nav-sheet');
+  const abrirSheet = () => { navSheet.classList.remove('hidden'); navSheet.setAttribute('aria-hidden', 'false'); };
+  const fecharSheet = () => { navSheet.classList.add('hidden'); navSheet.setAttribute('aria-hidden', 'true'); };
+  const btnMenu = $('#btn-menu'); if (btnMenu) btnMenu.addEventListener('click', abrirSheet);
+  const sheetClose = $('#nav-sheet-close'); if (sheetClose) sheetClose.addEventListener('click', fecharSheet);
+  const sheetBack = $('#nav-sheet-backdrop'); if (sheetBack) sheetBack.addEventListener('click', fecharSheet);
+  navSheet && navSheet.querySelectorAll('[data-view]').forEach((btn) =>
+    btn.addEventListener('click', () => { fecharSheet(); irParaView(btn.getAttribute('data-view')); }));
+  const btnLogout2 = $('#btn-logout-2'); if (btnLogout2) btnLogout2.addEventListener('click', () => { fecharSheet(); $('#btn-logout').click(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !navSheet.classList.contains('hidden')) fecharSheet(); });
   $('#theme-toggle').addEventListener('click', () => aplicarTema(temaAtual() === 'light' ? 'dark' : 'light'));
   $('#search').addEventListener('input', (e) => { state.busca = e.target.value.trim().toLowerCase(); if (state.view === 'leads' || state.view === 'conversoes') render(); });
   $('#fab').addEventListener('click', () => abrirModalLead(null));
@@ -146,7 +168,8 @@
     const root = $('#view-root');
     if (!state.metrics) { root.innerHTML = '<div class="card"><div class="card-sub">Carregando…</div></div>'; return; }
     const v = state.view;
-    if (v === 'dashboard') root.innerHTML = viewDashboard();
+    if (v === 'hoje') root.innerHTML = viewHoje();
+    else if (v === 'dashboard') root.innerHTML = viewDashboard();
     else if (v === 'roles') root.innerHTML = viewRoles();
     else if (v === 'leads') root.innerHTML = viewLeads('Leads — Abordagens', state.leads, true);
     else if (v === 'conversoes') root.innerHTML = viewLeads('Conversões', state.leads.filter((l) => l.status === 'convertida'), false);
@@ -155,6 +178,63 @@
     else if (v === 'inteligencia') root.innerHTML = viewInteligencia();
     else if (v === 'config') root.innerHTML = viewConfig();
     wire(root);
+  }
+
+  // ---------- HOJE (rolê ao vivo — uso rápido no rolê) ----------
+  function viewHoje() {
+    const live = state.roles.find((r) => r.aoVivo);
+    if (!live) {
+      return `<div class="card empty-hero">
+        <div class="empty-emoji">🍻</div>
+        <div class="card-title" style="font-size:20px">Nenhum rolê hoje ainda</div>
+        <div class="card-sub empty-msg">Começou a noite? Cria o rolê de hoje pra registrar as bebidas (com o horário real) e as abordagens em tempo real.</div>
+        <button class="btn btn-primary" id="hoje-novo-role" style="width:auto;padding:12px 22px;margin-top:18px">+ Iniciar rolê de hoje</button>
+      </div>`;
+    }
+    const rr = state.hojeResumo; // sempre o rolê ao vivo (carregado no recarregar)
+    const bac = rr ? rr.bac : 0;
+    const fracBac = Math.max(0, Math.min(1, bac / 0.4));
+    const zona = bac < 0.15 ? ['Zona ótima', 'tag-good'] : bac < 0.25 ? ['Cuidado', 'tag-danger'] : ['Perigo', 'tag-danger'];
+    const curvaSvg = rr && rr.curva && rr.curva.length > 1 ? Charts.bacCurve(rr.curva)
+      : '<div class="card-sub" style="text-align:center;padding:22px 0">Adicione bebidas pra ver a curva de álcool da noite.</div>';
+    const linha = (rr && rr.linha) || [];
+    const timeline = linha.length ? linha.map((d) => {
+      const p = partesBRT(new Date(d.momento));
+      return `<div class="tl-row">
+        <span class="tl-nome">${esc(d.nome)}</span>
+        <input type="time" class="tl-time" value="${p.hour}:${p.minute}" data-cons="${d.id}" data-date="${p.year}-${p.month}-${p.day}">
+        <button class="mini-btn del" data-delcons="${d.id}" title="Remover">✕</button></div>`;
+    }).join('') : '<div class="card-sub">Nenhuma bebida registrada ainda. Use “+ Bebida”.</div>';
+    const leadsHoje = state.leads.filter((l) => l.role_id === live.id);
+    return `
+      <section class="two-col">
+        <div class="card flexcol">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+            <div><div class="card-title">🔥 Rolê de hoje</div>
+              <div class="card-sub">${esc(live.local || 'Sem local')} · ${rr ? rr.doses : 0} dose(s)</div></div>
+            <span class="live"><span class="dot"></span>AO VIVO</span></div>
+          <div style="width:100%;max-width:224px;margin:10px auto 0">${Charts.speedo(fracBac)}</div>
+          <div class="center" style="margin-top:2px"><div class="big-num">${fmtBac(bac)}</div>
+            <div style="font-size:11px;color:var(--text-3);margin-top:4px">g/L agora</div></div>
+          <div style="margin-top:12px;display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">
+            <span class="tag ${zona[1]}">${zona[0]}</span>
+            <button class="mini-btn" id="hoje-add-bebida">+ Bebida</button>
+            <button class="mini-btn" id="hoje-add-lead">+ Abordagem</button></div>
+        </div>
+        <div class="card">
+          <div class="card-title">Curva de álcool</div><div class="card-sub">Ao longo da noite, pelo horário de cada bebida</div>
+          <div style="margin-top:12px">${curvaSvg}</div>
+          <div class="card-title" style="font-size:14px;margin-top:18px">Bebidas &amp; horários</div>
+          <div class="card-sub">Toque na hora pra ajustar quando bebeu</div>
+          <div class="timeline">${timeline}</div>
+        </div>
+      </section>
+      <section><div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px">
+          <div><div class="card-title">Abordagens de hoje</div><div class="card-sub">${leadsHoje.length} registro(s) nesta noite</div></div>
+          <button class="btn btn-ghost" id="hoje-add-lead2" style="width:auto;padding:9px 14px">+ Abordagem</button></div>
+        ${tabelaLeads(leadsHoje, true, true)}
+      </div></section>`;
   }
 
   // ---------- DASHBOARD ----------
@@ -467,7 +547,62 @@
     <section>
       <div class="card"><div class="card-title">Por local</div><div class="card-sub">Conversão e objeção de cada lugar</div>
         <div style="margin-top:10px">${corte(it.porLocal, 'Local')}</div></div>
-    </section>`;
+    </section>
+    ${secaoAnalise()}`;
+  }
+
+  // ---------- ANÁLISE ESTATÍSTICA (regressão/correlação, dentro da Inteligência) ----------
+  function secaoAnalise() {
+    const a = state.analise;
+    if (!a || !a.n) return '';
+    if (a.n < 4 || !a.correlacoes || !a.correlacoes.length) {
+      return `<section><div class="card"><div class="card-title">📈 Análise estatística</div>
+        <div class="card-sub">Registre mais abordagens (com álcool, cantada, local e objeção) pra desbloquear regressão e correlações. Agora: ${a.n} lead(s).</div></div></section>`;
+    }
+    const fmtP = (p) => (p < 0.001 ? '<0,001' : p.toFixed(3).replace('.', ','));
+    const n2 = (v) => Number(v).toFixed(2).replace('.', ',');
+    const badge = (s) => `<span class="tag ${s ? 'tag-good' : 'tag-muted'}">${s ? 'significativo' : 'n.s.'}</span>`;
+    const aviso = a.amostraPequena
+      ? `<div class="aviso-amostra">⚠️ Amostra pequena (n=${a.n}, ${a.nConvertidas} conversões) — os números são <b>indicativos</b>, não conclusivos. E <b>correlação não é causa</b>. Ficam confiáveis conforme você registra mais.</div>`
+      : `<div class="card-sub">n=${a.n} · ${a.nConvertidas} conversões · lembre: correlação não é causa.</div>`;
+    const maxR = Math.max(0.001, ...a.correlacoes.map((c) => Math.abs(c.r)));
+    const corrRows = a.correlacoes.map((c) => {
+      const dir = c.r >= 0 ? 'var(--good)' : 'var(--danger)';
+      return `<div style="margin-bottom:12px"><div class="rank-head"><span style="font-weight:600">${esc(c.label)}</span>
+        <span class="rank-val">r=${n2(c.r)} ${badge(c.signif)}</span></div>
+        <div class="bar"><span style="width:${Math.round(100 * Math.abs(c.r) / maxR)}%;background:${dir}"></span></div>
+        <div class="card-sub" style="margin-top:3px">p=${fmtP(c.p)} · ${c.r >= 0 ? 'quanto maior, mais converte' : 'quanto maior, menos converte'}</div></div>`;
+    }).join('');
+    const t = a.tendencia;
+    const curva = t ? `<div class="card"><div class="card-title">Curva de tendência — ${esc(t.label)}</div>
+      <div class="card-sub">Probabilidade de conversão prevista (logística) · pseudo-R²=${n2(t.mcfaddenR2 || 0)} · 🟢 converteu · 🔴 não</div>
+      <div style="margin-top:14px">${Charts.scatterTrend(t.observados, t.pontos, t.label)}</div></div>` : '';
+    const lm = a.logisticaMulti;
+    const multiTab = lm ? `<div class="card"><div class="card-title">Regressão logística múltipla</div>
+      <div class="card-sub">Efeito de cada fator na conversão controlando os outros · pseudo-R²=${n2(lm.mcfaddenR2)} · n=${lm.n}${lm.converged ? '' : ' · ⚠️ não convergiu'}</div>
+      <div class="tabela-scroll"><table class="leads" style="margin-top:12px"><thead><tr><th>Fator</th><th style="text-align:center">Coef.</th><th style="text-align:center">Odds ratio</th><th style="text-align:center">p</th></tr></thead>
+      <tbody>${lm.termos.map((tm) => `<tr><td>${esc(tm.label)}</td>
+        <td class="mono" data-label="Coef." style="text-align:center">${n2(tm.coef)}</td>
+        <td class="mono" data-label="Odds" style="text-align:center">${n2(tm.oddsRatio)}×</td>
+        <td class="mono" data-label="p" style="text-align:center">${fmtP(tm.p)} ${tm.signif ? '✓' : ''}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+    const lin = a.linear;
+    const linTab = lin ? `<div class="card"><div class="card-title">Regressão linear — ${esc(lin.alvo)}</div>
+      <div class="card-sub">Outra ótica (alvo contínuo) · R²=${n2(lin.r2)} · n=${lin.n}</div>
+      <div class="tabela-scroll"><table class="leads" style="margin-top:12px"><thead><tr><th>Fator</th><th style="text-align:center">Coef.</th><th style="text-align:center">p</th></tr></thead>
+      <tbody>${lin.termos.map((tm) => `<tr><td>${esc(tm.label)}</td><td class="mono" data-label="Coef." style="text-align:center">${n2(tm.coef)}</td><td class="mono" data-label="p" style="text-align:center">${fmtP(tm.p)}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+    const cat = a.categoricos && a.categoricos.length ? `<div class="card"><div class="card-title">Associação categórica (Cramér's V)</div>
+      <div class="card-sub">Força da associação de cada categoria com a conversão (0 = nenhuma, 1 = total)</div>
+      <div class="tabela-scroll"><table class="leads" style="margin-top:12px"><thead><tr><th>Fator</th><th style="text-align:center">V</th><th style="text-align:center">p</th></tr></thead>
+      <tbody>${a.categoricos.map((c) => `<tr><td>${esc(c.fator)}</td><td class="mono" data-label="V" style="text-align:center">${n2(c.v)}</td><td class="mono" data-label="p" style="text-align:center">${fmtP(c.p)} ${c.signif ? '✓' : ''}</td></tr>`).join('')}</tbody></table></div></div>` : '';
+    return `<section><div class="card" style="margin-bottom:20px">
+        <div class="card-title">📈 Análise estatística — regressão &amp; correlação</div>
+        ${aviso}
+        <div class="card-sub" style="margin-top:14px;font-weight:600;color:var(--text)">Força de cada fator na conversão</div>
+        <div style="margin-top:12px">${corrRows}</div></div></section>
+      ${curva ? `<section>${curva}</section>` : ''}
+      ${multiTab ? `<section>${multiTab}</section>` : ''}
+      ${linTab ? `<section>${linTab}</section>` : ''}
+      ${cat ? `<section>${cat}</section>` : ''}`;
   }
 
   // ---------- CONFIGURAÇÕES ----------
@@ -521,6 +656,19 @@
     });
     const alcAdd = root.querySelector('#alcool-add');
     if (alcAdd) alcAdd.addEventListener('click', () => { if (state.alcoolRoleId) abrirModalBebidas(state.alcoolRoleId); });
+    // tela HOJE
+    const liveRole = state.roles.find((r) => r.aoVivo);
+    const hnr = root.querySelector('#hoje-novo-role'); if (hnr) hnr.addEventListener('click', () => abrirModalRole(null));
+    const hab = root.querySelector('#hoje-add-bebida'); if (hab && liveRole) hab.addEventListener('click', () => abrirModalBebidas(liveRole.id));
+    root.querySelectorAll('#hoje-add-lead, #hoje-add-lead2').forEach((b) => b.addEventListener('click', () => abrirModalLead(null)));
+    // editar horário de uma bebida na timeline
+    root.querySelectorAll('.tl-time').forEach((el) => el.addEventListener('change', () => {
+      const id = el.getAttribute('data-cons'), date = el.getAttribute('data-date');
+      if (!el.value) return;
+      comFeedback(() => jpost('/api/consumo/' + id, { momento: momentoParaISO(date + 'T' + el.value) }, 'PUT'), 'Horário atualizado');
+    }));
+    root.querySelectorAll('[data-delcons]').forEach((el) => el.addEventListener('click', () =>
+      comFeedback(() => api('/api/consumo/' + el.getAttribute('data-delcons'), { method: 'DELETE' }), 'Bebida removida')));
     // rolês
     const addRole = root.querySelector('#add-role'); if (addRole) addRole.addEventListener('click', () => abrirModalRole(null));
     root.querySelectorAll('[data-bebrole]').forEach((el) => el.addEventListener('click', () =>
@@ -589,20 +737,31 @@
       const b = box.querySelector('[data-drinks-bac]'); if (b) b.textContent = fmtBac(resumo.bac);
       if (onResumo) onResumo(resumo);
     };
-    const act = (url, bebidaId) => async () => {
+    const act = (url, bebidaId, comMomento) => async () => {
       const roleId = await getRoleId(); if (!roleId) return;
-      try { upd(await jpost(url, { role_id: roleId, bebida_id: Number(bebidaId) })); } catch (e) { toast('Erro: ' + e.message); }
+      const body = { role_id: roleId, bebida_id: Number(bebidaId) };
+      if (comMomento) body.momento = new Date().toISOString(); // hora real do toque → curva de álcool
+      try { upd(await jpost(url, body)); } catch (e) { toast('Erro: ' + e.message); }
     };
-    box.querySelectorAll('[data-bev-plus]').forEach((el) => el.addEventListener('click', act('/api/consumo', el.getAttribute('data-bev-plus'))));
+    box.querySelectorAll('[data-bev-plus]').forEach((el) => el.addEventListener('click', act('/api/consumo', el.getAttribute('data-bev-plus'), true)));
     box.querySelectorAll('[data-bev-minus]').forEach((el) => el.addEventListener('click', act('/api/consumo/remover', el.getAttribute('data-bev-minus'))));
   }
 
   // ---------- MODAIS (infra) ----------
   function abrirModal(html, onClose) {
     $('#modal-root').innerHTML = `<div class="modal-backdrop" id="mback">${html}</div>`;
-    const fechar = () => { if (onClose) { try { onClose(); } catch (e) {} } $('#modal-root').innerHTML = ''; };
+    const escHandler = (e) => { if (e.key === 'Escape') fechar(); };
+    const fechar = () => {
+      document.removeEventListener('keydown', escHandler);
+      if (onClose) { try { onClose(); } catch (e) {} }
+      $('#modal-root').innerHTML = '';
+    };
     $('#mback').addEventListener('click', (e) => { if (e.target.id === 'mback') fechar(); });
     const c = $('#m-cancel'); if (c) c.addEventListener('click', fechar);
+    document.addEventListener('keydown', escHandler); // ESC fecha o modal
+    // foco no 1º campo editável (melhora o uso rápido, especialmente no mobile)
+    const first = $('#modal-root').querySelector('input:not([type=file]):not([type=hidden]), select, textarea');
+    if (first) setTimeout(() => { try { first.focus({ preventScroll: true }); } catch (e) {} }, 30);
     return fechar;
   }
   const localSelectHTML = (sel) => `<select id="f-local-sel" class="role-select" style="max-width:100%">
@@ -628,7 +787,11 @@
     const optsCarac = CARAC_OPTS.map((c) => `<option ${lead && lead.caracteristica===c?'selected':''}>${c}</option>`).join('');
     const optsStatus = STATUS_OPTS.map(([v,l]) => `<option value="${v}" ${lead && lead.status===v?'selected':''}>${l}</option>`).join('');
     const dl = state.cantadas.map((c) => `<option value="${esc(c.texto)}">`).join('');
-    const dlObj = (state.objecoes || []).map((o) => `<option value="${esc(o)}">`).join('');
+    // objeção vira select das já usadas + "＋ nova" (sem apagar as existentes)
+    const objAtual = ed && lead.objecao ? lead.objecao : '';
+    const objLista = (state.objecoes || []).slice();
+    if (objAtual && !objLista.includes(objAtual)) objLista.unshift(objAtual); // garante a atual na lista ao editar
+    const objOpts = objLista.map((o) => `<option value="${esc(o)}" ${o === objAtual ? 'selected' : ''}>${esc(o)}</option>`).join('');
     const momento = lead ? paraInputLocal(new Date(lead.momento)) : paraInputLocal(new Date());
 
     const fechar = abrirModal(`<form class="modal" id="lead-form">
@@ -660,8 +823,12 @@
         <input id="f-cantada" list="dl-cantadas" placeholder="escreva ou escolha…" value="${esc(ed && lead.cantada_texto || '')}">
         <datalist id="dl-cantadas">${dl}</datalist></div>
       <div class="field"><label>Objeção (opcional)</label>
-        <input id="f-objecao" list="dl-objecoes" placeholder="por que não rolou? (ex.: tem namorado)" value="${esc(ed && lead.objecao || '')}">
-        <datalist id="dl-objecoes">${dlObj}</datalist></div>
+        <select id="f-objecao">
+          <option value="">— sem objeção —</option>
+          ${objOpts}
+          <option value="__nova__">＋ nova objeção…</option>
+        </select>
+        <input id="f-objecao-nova" class="hidden" placeholder="por que não rolou? (ex.: tem namorado)" style="margin-top:8px"></div>
       <div class="field"><label>Data e hora (horário da foto)</label><input id="f-momento" type="datetime-local" value="${momento}"></div>
 
       <div class="modal-actions">
@@ -707,6 +874,15 @@
     cam.addEventListener('change', () => onFoto(cam.files[0]));
     gal.addEventListener('change', () => onFoto(gal.files[0]));
 
+    // objeção: "＋ nova" revela o campo de texto livre
+    const objSel = $('#f-objecao'), objNova = $('#f-objecao-nova');
+    objSel.addEventListener('change', () => {
+      const nova = objSel.value === '__nova__';
+      objNova.classList.toggle('hidden', !nova);
+      if (nova) objNova.focus();
+    });
+    const objecaoEscolhida = () => objSel.value === '__nova__' ? objNova.value.trim() : objSel.value;
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const roleId = await garantirRole();
@@ -716,7 +892,7 @@
       fd.append('role_id', roleId);
       fd.append('caracteristica', $('#f-carac').value);
       fd.append('cantada_texto', $('#f-cantada').value.trim());
-      fd.append('objecao', $('#f-objecao').value.trim());
+      fd.append('objecao', objecaoEscolhida());
       fd.append('status', $('#f-status').value);
       // envia o horário inequívoco (ISO), interpretando o input como BRT — corrige o fuso ponta-a-ponta
       fd.append('momento', momentoParaISO($('#f-momento').value));
