@@ -71,7 +71,9 @@ CREATE TABLE leads (
   caracteristica TEXT,
   cantada_id    INTEGER REFERENCES cantadas(id) ON DELETE SET NULL,
   status        TEXT NOT NULL DEFAULT 'em_conversa',   -- convertida | em_conversa | fora
+  objecao       TEXT,                                  -- por que não converteu / obstáculo (inteligência comercial)
   momento       TIMESTAMPTZ NOT NULL,                  -- horário da foto (séries por hora)
+  convertida_em TIMESTAMPTZ,                           -- quando virou convertida (lead time = convertida_em - momento)
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

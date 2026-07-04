@@ -141,7 +141,8 @@ async function resolveRole(b) {
 // resumo de um rolê: bebidas, doses, total de gramas e BAC (Widmark)
 async function resumoRole(roleId) {
   const rq = await query(
-    `SELECT r.id, r.data::text AS data, r.local_id, lo.nome AS local, r.titulo
+    `SELECT r.id, r.data::text AS data, r.local_id, lo.nome AS local, r.titulo,
+            (r.data = CURRENT_DATE) AS ao_vivo
        FROM roles r LEFT JOIN locais lo ON lo.id = r.local_id WHERE r.id = $1`, [roleId]);
   if (!rq.rows.length) return null;
   const role = rq.rows[0];
@@ -161,7 +162,7 @@ async function resumoRole(roleId) {
     return { bebida_id: r.bebida_id, nome: r.nome, ml: r.ml, abv: Number(r.abv), qtd: r.qtd, gramas: +gramas.toFixed(1) };
   });
   const pesoKg = Number(cfg.peso_kg), rFac = Number(cfg.r);
-  const aoVivo = role.data === hojeStr();
+  const aoVivo = role.ao_vivo === true; // "hoje" vem do banco (BRT), não do relógio do servidor
   let horas = 0;
   if (primeiro) {
     const ref = aoVivo ? new Date() : (ultimo || primeiro);
@@ -401,6 +402,9 @@ app.post('/api/consumo/remover', requireAuth, async (req, res, next) => {
 // ---- LEADS (CRUD) ----
 const LEAD_SELECT = `
   SELECT l.id, l.codigo, l.foto_path, l.caracteristica, l.status, l.momento,
+         l.objecao, l.convertida_em,
+         CASE WHEN l.convertida_em IS NULL THEN NULL
+              ELSE GREATEST(0, EXTRACT(EPOCH FROM (l.convertida_em - l.momento))::int) END AS lead_time_seg,
          l.cantada_id, c.texto AS cantada_texto,
          l.role_id, r.data::text AS role_data, r.local_id, lo.nome AS local, r.titulo AS role_titulo
     FROM leads l
@@ -423,11 +427,12 @@ app.post('/api/leads', requireAuth, upload.single('foto'), async (req, res, next
     const momento = b.momento ? new Date(b.momento) : new Date();
     const cantadaId = await resolveCantada(b);
     const status = STATUS_VALIDOS.has(b.status) ? b.status : 'em_conversa';
+    const convertidaEm = status === 'convertida' ? momento : null; // nasceu convertida → converteu na abordagem
 
     const ins = await query(
-      `INSERT INTO leads (role_id, foto_path, caracteristica, cantada_id, status, momento)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [roleId, fotoPath, b.caracteristica || null, cantadaId, status, momento]);
+      `INSERT INTO leads (role_id, foto_path, caracteristica, cantada_id, status, objecao, momento, convertida_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [roleId, fotoPath, b.caracteristica || null, cantadaId, status, manter(b.objecao), momento, convertidaEm]);
     const id = ins.rows[0].id;
     await query(`UPDATE leads SET codigo=$1 WHERE id=$2`, ['#' + String(id).padStart(4, '0'), id]);
     // taxa de cantada é derivada dos leads em tempo real (GET /api/cantadas) — sem contador aqui
@@ -447,6 +452,7 @@ app.put('/api/leads/:id', requireAuth, upload.single('foto'), async (req, res, n
     const momento = b.momento ? new Date(b.momento) : null;
     const roleId = posInt(b.role_id);
     const cantadaId = (b.cantada_id || b.cantada_texto) ? await resolveCantada(b) : null;
+    const statusNovo = STATUS_VALIDOS.has(b.status) ? b.status : null;
     const { rows } = await query(
       `UPDATE leads SET
          role_id = COALESCE($1, role_id),
@@ -454,10 +460,15 @@ app.put('/api/leads/:id', requireAuth, upload.single('foto'), async (req, res, n
          cantada_id = COALESCE($3, cantada_id),
          status = COALESCE($4, status),
          momento = COALESCE($5, momento),
-         foto_path = COALESCE($6, foto_path)
-       WHERE id=$7 RETURNING id`,
+         foto_path = COALESCE($6, foto_path),
+         objecao = COALESCE($7, objecao),
+         convertida_em = CASE
+           WHEN $4 IS NULL THEN convertida_em
+           WHEN $4 = 'convertida' THEN COALESCE(convertida_em, now())
+           ELSE NULL END
+       WHERE id=$8 RETURNING id`,
       [roleId, manter(b.caracteristica), cantadaId,
-       STATUS_VALIDOS.has(b.status) ? b.status : null, momento, fotoPath, req.params.id]);
+       statusNovo, momento, fotoPath, manter(b.objecao), req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'nao_encontrado' });
     if (fotoPath && fotoAntiga && fotoAntiga !== fotoPath) await apagarFotosDe([fotoAntiga]);
     const out = await query(`${LEAD_SELECT} WHERE l.id=$1`, [req.params.id]);
@@ -508,7 +519,7 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
         FROM leads l JOIN roles r ON r.id=l.role_id LEFT JOIN locais lo ON lo.id=r.local_id
        WHERE l.status='convertida' GROUP BY 1 ORDER BY n DESC LIMIT 5`);
 
-    const yr = new Date().getFullYear();
+    const yr = (await query(`SELECT EXTRACT(YEAR FROM CURRENT_DATE)::int AS yr`)).rows[0].yr; // ano em BRT
     const linhaQ = await query(`
       SELECT EXTRACT(YEAR FROM r.data)::int AS yr, EXTRACT(MONTH FROM r.data)::int AS mo, count(*) AS n
         FROM leads l JOIN roles r ON r.id=l.role_id
@@ -524,9 +535,13 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
     const horaQ = await query(`
       SELECT EXTRACT(HOUR FROM momento)::int AS hora, count(*) AS n
         FROM leads WHERE status='convertida' GROUP BY 1 ORDER BY n DESC`);
+    // lead time médio (abordagem → conversão)
+    const ltQ = await query(`SELECT AVG(GREATEST(0, EXTRACT(EPOCH FROM (convertida_em - momento))))::float AS seg
+                               FROM leads WHERE status='convertida' AND convertida_em IS NOT NULL`);
+    const leadTimeMedioSeg = ltQ.rows[0].seg != null ? Math.round(ltQ.rows[0].seg) : null;
 
     res.json({
-      kpis: { abordagensMes, conversoesMes, taxa, cantadasUsadas: Number(m.cantadas_usadas) },
+      kpis: { abordagensMes, conversoesMes, taxa, cantadasUsadas: Number(m.cantadas_usadas), leadTimeMedioSeg },
       alcool,
       meta: { alvo: metaAlvo, atual: conversoesMes, pct: Math.min(1, conversoesMes / metaAlvo) },
       donut: donutQ.rows.map((r) => ({ caracteristica: r.caracteristica, n: Number(r.n) })),
@@ -534,6 +549,53 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
       linha: { meses: ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'], atual, anterior },
       cantadas: cantadasQ.rows.map((r) => ({ texto: r.texto, tentativas: Number(r.tentativas), sucessos: Number(r.sucessos), taxa: Number(r.taxa) })),
       melhorHorario: horaQ.rows.map((r) => ({ hora: Number(r.hora), n: Number(r.n) })),
+    });
+  } catch (e) { next(e); }
+});
+
+// ---- INTELIGÊNCIA COMERCIAL ----
+// objeções já usadas (pro datalist do modal)
+app.get('/api/objecoes', requireAuth, async (_req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT DISTINCT objecao FROM leads WHERE objecao IS NOT NULL AND objecao <> '' ORDER BY objecao`);
+    res.json(rows.map((r) => r.objecao));
+  } catch (e) { next(e); }
+});
+// agregações de objeções + funil + lead time
+app.get('/api/inteligencia', requireAuth, async (_req, res, next) => {
+  try {
+    const obj = await query(`
+      SELECT objecao, count(*)::int AS n FROM leads
+       WHERE objecao IS NOT NULL AND objecao <> '' GROUP BY objecao ORDER BY n DESC`);
+    const porCantada = await query(`
+      SELECT c.texto AS cantada, count(l.*)::int AS total,
+             count(*) FILTER (WHERE l.objecao IS NOT NULL AND l.objecao<>'')::int AS com_objecao,
+             count(*) FILTER (WHERE l.status='convertida')::int AS convertidas,
+             mode() WITHIN GROUP (ORDER BY NULLIF(l.objecao,'')) AS objecao_top
+        FROM leads l JOIN cantadas c ON c.id=l.cantada_id
+       GROUP BY c.texto ORDER BY total DESC`);
+    const porLocal = await query(`
+      SELECT lo.nome AS local, count(l.*)::int AS total,
+             count(*) FILTER (WHERE l.objecao IS NOT NULL AND l.objecao<>'')::int AS com_objecao,
+             count(*) FILTER (WHERE l.status='convertida')::int AS convertidas,
+             mode() WITHIN GROUP (ORDER BY NULLIF(l.objecao,'')) AS objecao_top
+        FROM leads l JOIN roles r ON r.id=l.role_id JOIN locais lo ON lo.id=r.local_id
+       GROUP BY lo.nome ORDER BY total DESC`);
+    const fu = (await query(`
+      SELECT count(*)::int AS abordagens,
+             count(*) FILTER (WHERE status IN ('em_conversa','convertida'))::int AS engajou,
+             count(*) FILTER (WHERE status='convertida')::int AS convertidas,
+             count(*) FILTER (WHERE status='fora')::int AS fora
+        FROM leads`)).rows[0];
+    const lt = (await query(`SELECT AVG(GREATEST(0, EXTRACT(EPOCH FROM (convertida_em - momento))))::float AS seg
+                               FROM leads WHERE convertida_em IS NOT NULL`)).rows[0];
+    res.json({
+      objecoes: obj.rows.map((r) => ({ objecao: r.objecao, n: r.n })),
+      porCantada: porCantada.rows.map((r) => ({ cantada: r.cantada, total: r.total, comObjecao: r.com_objecao, convertidas: r.convertidas, objecaoTop: r.objecao_top })),
+      porLocal: porLocal.rows.map((r) => ({ local: r.local, total: r.total, comObjecao: r.com_objecao, convertidas: r.convertidas, objecaoTop: r.objecao_top })),
+      funil: fu,
+      leadTimeMedioSeg: lt.seg != null ? Math.round(lt.seg) : null,
     });
   } catch (e) { next(e); }
 });

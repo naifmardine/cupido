@@ -4,7 +4,8 @@
   const $ = (s, el = document) => el.querySelector(s);
   const state = {
     metrics: null, leads: [], cantadas: [], locais: [], bebidas: [], config: null,
-    roles: [], alcoolRoleId: null, alcoolResumo: null, view: 'dashboard', busca: '',
+    roles: [], inteligencia: null, objecoes: [], alcoolRoleId: null, alcoolResumo: null,
+    view: 'dashboard', busca: '',
   };
 
   const COR_CARAC = { Morena:'#5a3b30', Loira:'#e0a92e', Ruiva:'#d05a2e', Castanha:'#8a5a3c', Outras:'#b9aca6' };
@@ -43,6 +44,15 @@
   const paraInputLocal = (d) => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
   const horaDeISO = (iso) => { const d = new Date(iso); return `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
   const fmtBac = (v) => String(Number(v || 0).toFixed(2)).replace('.', ',');
+  function fmtDuracao(seg) { // segundos → "2d 4h", "3h 20min", "45min", "< 1min"
+    if (seg == null) return '—';
+    const s = Math.max(0, Math.round(seg));
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), min = Math.floor((s % 3600) / 60);
+    if (d) return `${d}d ${h}h`;
+    if (h) return `${h}h ${min}min`;
+    if (min) return `${min}min`;
+    return '< 1min';
+  }
   function formataDataCurta(dstr) { if (!dstr) return '—'; const [y,mo,d] = dstr.split('-'); const dt = new Date(+y, +mo-1, +d); return `${DIAS_ABR[dt.getDay()]} ${d}/${mo}`; }
   const hojeInputDate = () => { const d = new Date(); return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`; };
   const roleLabel = (r) => `${formataDataCurta(r.data)} · ${r.local || 'sem local'}`;
@@ -76,11 +86,12 @@
 
   // ---------- DADOS ----------
   async function recarregar() {
-    const [metrics, leads, cantadas, locais, bebidas, config, roles] = await Promise.all([
+    const [metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes] = await Promise.all([
       api('/api/metrics'), api('/api/leads'), api('/api/cantadas'),
       api('/api/locais'), api('/api/bebidas'), api('/api/configuracoes'), api('/api/roles'),
+      api('/api/inteligencia'), api('/api/objecoes'),
     ]);
-    Object.assign(state, { metrics, leads, cantadas, locais, bebidas, config, roles });
+    Object.assign(state, { metrics, leads, cantadas, locais, bebidas, config, roles, inteligencia, objecoes });
     if (!state.alcoolRoleId || !roles.find((r) => r.id === state.alcoolRoleId))
       state.alcoolRoleId = (metrics.alcool && metrics.alcool.role_id) || (roles[0] && roles[0].id) || null;
     state.alcoolResumo = state.alcoolRoleId ? await api('/api/consumo?role_id=' + state.alcoolRoleId) : null;
@@ -115,6 +126,7 @@
     else if (v === 'conversoes') root.innerHTML = viewLeads('Conversões', state.leads.filter((l) => l.status === 'convertida'));
     else if (v === 'cantadas') root.innerHTML = viewCantadas();
     else if (v === 'locais') root.innerHTML = viewLocais();
+    else if (v === 'inteligencia') root.innerHTML = viewInteligencia();
     else if (v === 'config') root.innerHTML = viewConfig();
     wire(root);
   }
@@ -158,6 +170,7 @@
       ${kpi('Conversões', m.kpis.conversoesMes, 'Números conseguidos este mês')}
       ${kpi('Taxa de conversão', m.kpis.taxa + '%', `${m.kpis.conversoesMes} de ${m.kpis.abordagensMes} abordagens`)}
       ${kpi('Cantadas usadas', m.kpis.cantadasUsadas, 'Repertório em uso')}
+      ${kpi('Tempo até conquistar', fmtDuracao(m.kpis.leadTimeMedioSeg), 'Média da abordagem à conversão')}
     </section>
 
     <section class="gauge-grid">
@@ -296,6 +309,67 @@
       <div><div class="card-title">Cantadas &amp; Repertório</div><div class="card-sub">Ranqueadas por taxa de sucesso</div></div>
       <button class="btn btn-ghost" id="add-cantada" style="width:auto;padding:9px 14px">+ Nova cantada</button></div>
       ${rows || '<span class="card-sub">Sem cantadas</span>'}</div>`;
+  }
+
+  // ---------- INTELIGÊNCIA COMERCIAL ----------
+  const kpiHTML = (label, num, foot) => `<div class="kpi"><div class="kpi-label">${label}</div>
+    <div class="kpi-row"><div class="kpi-num">${num}</div></div><div class="kpi-foot">${foot}</div></div>`;
+
+  function viewInteligencia() {
+    const it = state.inteligencia || { objecoes: [], porCantada: [], porLocal: [], funil: {}, leadTimeMedioSeg: null };
+    const f = it.funil || {};
+    const totalLeads = f.abordagens || 0;
+    const taxa = totalLeads ? Math.round(100 * (f.convertidas || 0) / totalLeads) : 0;
+
+    const head = `<section class="kpi-grid" style="margin-bottom:20px">
+      ${kpiHTML('Leads', totalLeads, 'abordagens registradas')}
+      ${kpiHTML('Taxa de conversão', taxa + '%', (f.convertidas || 0) + ' convertidas')}
+      ${kpiHTML('Tempo até conquistar', fmtDuracao(it.leadTimeMedioSeg), 'média da abordagem à conversão')}</section>`;
+
+    const stages = [['Abordagens', f.abordagens || 0], ['Engajou (em conversa+)', f.engajou || 0], ['Convertidas', f.convertidas || 0]];
+    const maxF = Math.max(1, ...stages.map((s) => s[1]));
+    const funil = stages.map((s) => {
+      const pctTotal = totalLeads ? Math.round(100 * s[1] / totalLeads) : 0;
+      return `<div style="margin-bottom:12px"><div class="rank-head"><span style="font-weight:600">${s[0]}</span>
+        <span class="rank-val">${s[1]} <span style="color:var(--text-3);font-weight:500">· ${pctTotal}%</span></span></div>
+        <div class="bar" style="height:13px"><span style="width:${Math.round(100*s[1]/maxF)}%"></span></div></div>`;
+    }).join('');
+
+    const maxObj = Math.max(1, ...it.objecoes.map((o) => o.n));
+    const objs = it.objecoes.length ? it.objecoes.map((o, i) => `
+      <div style="margin-bottom:12px"><div class="rank-head"><span class="rank-num">${i+1}</span>
+        <span style="font-weight:600">${esc(o.objecao)}</span><span class="rank-val">${o.n}</span></div>
+        <div class="bar"><span style="width:${Math.round(100*o.n/maxObj)}%;background:linear-gradient(90deg,var(--danger),var(--accent-2))"></span></div></div>`).join('')
+      : '<span class="card-sub">Nenhuma objeção ainda. Preencha o campo "Objeção" ao cadastrar/editar um lead.</span>';
+
+    const corte = (rows, colLabel) => {
+      if (!rows.length) return '<span class="card-sub">Sem dados</span>';
+      const linhas = rows.map((r) => {
+        const taxaConv = r.total ? Math.round(100 * r.convertidas / r.total) : 0;
+        const cls = taxaConv >= 50 ? 'var(--good)' : taxaConv >= 30 ? 'var(--warn)' : 'var(--danger)';
+        return `<tr><td>${esc(r.cantada || r.local || '—')}</td>
+          <td class="mono" data-label="Leads" style="text-align:center">${r.total}</td>
+          <td class="mono" data-label="Conv." style="text-align:center;color:${cls}">${taxaConv}%</td>
+          <td data-label="Objeção +comum" style="color:var(--text-2)">${esc(r.objecaoTop || '—')}</td></tr>`;
+      }).join('');
+      return `<table class="leads"><thead><tr>
+        <th>${colLabel}</th><th style="text-align:center">Leads</th><th style="text-align:center">Conv.</th><th>Objeção + comum</th></tr></thead>
+        <tbody>${linhas}</tbody></table>`;
+    };
+
+    return `${head}
+    <section class="two-col">
+      <div class="card"><div class="card-title">Funil de status</div><div class="card-sub">Da abordagem à conversão · ${f.fora||0} marcadas "fora"</div>
+        <div style="margin-top:16px">${funil}</div></div>
+      <div class="card"><div class="card-title">Objeções mais comuns</div><div class="card-sub">O que mais te barra</div>
+        <div style="margin-top:16px">${objs}</div></div>
+    </section>
+    <section class="two-col">
+      <div class="card"><div class="card-title">Por cantada</div><div class="card-sub">Conversão e objeção de cada frase</div>
+        <div style="margin-top:10px">${corte(it.porCantada, 'Cantada')}</div></div>
+      <div class="card"><div class="card-title">Por local</div><div class="card-sub">Conversão e objeção de cada lugar</div>
+        <div style="margin-top:10px">${corte(it.porLocal, 'Local')}</div></div>
+    </section>`;
   }
 
   // ---------- CONFIGURAÇÕES ----------
@@ -448,6 +522,7 @@
     const optsCarac = CARAC_OPTS.map((c) => `<option ${lead && lead.caracteristica===c?'selected':''}>${c}</option>`).join('');
     const optsStatus = STATUS_OPTS.map(([v,l]) => `<option value="${v}" ${lead && lead.status===v?'selected':''}>${l}</option>`).join('');
     const dl = state.cantadas.map((c) => `<option value="${esc(c.texto)}">`).join('');
+    const dlObj = (state.objecoes || []).map((o) => `<option value="${esc(o)}">`).join('');
     const momento = lead ? paraInputLocal(new Date(lead.momento)) : paraInputLocal(new Date());
 
     const fechar = abrirModal(`<form class="modal" id="lead-form">
@@ -478,6 +553,9 @@
       <div class="field"><label>Cantada (opcional)</label>
         <input id="f-cantada" list="dl-cantadas" placeholder="escreva ou escolha…" value="${esc(ed && lead.cantada_texto || '')}">
         <datalist id="dl-cantadas">${dl}</datalist></div>
+      <div class="field"><label>Objeção (opcional)</label>
+        <input id="f-objecao" list="dl-objecoes" placeholder="por que não rolou? (ex.: tem namorado)" value="${esc(ed && lead.objecao || '')}">
+        <datalist id="dl-objecoes">${dlObj}</datalist></div>
       <div class="field"><label>Data e hora (horário da foto)</label><input id="f-momento" type="datetime-local" value="${momento}"></div>
 
       <div class="modal-actions">
@@ -530,8 +608,10 @@
       fd.append('role_id', roleId);
       fd.append('caracteristica', $('#f-carac').value);
       fd.append('cantada_texto', $('#f-cantada').value.trim());
+      fd.append('objecao', $('#f-objecao').value.trim());
       fd.append('status', $('#f-status').value);
-      fd.append('momento', $('#f-momento').value);
+      // envia o horário inequívoco (ISO/UTC) — corrige o fuso independente do TZ do servidor
+      fd.append('momento', $('#f-momento').value ? new Date($('#f-momento').value).toISOString() : '');
       try {
         if (ed) await api('/api/leads/' + lead.id, { method: 'PUT', body: fd });
         else await api('/api/leads', { method: 'POST', body: fd });

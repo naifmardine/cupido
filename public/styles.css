@@ -93,7 +93,7 @@ header.topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(
 .card-sub{font-size:12px;color:var(--text-2);margin-top:2px}
 
 /* KPIs */
-.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:20px}
 .kpi{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow);padding:18px 20px}
 .kpi-label{font-size:12.5px;font-weight:600;color:var(--text-2)}
 .kpi-row{display:flex;align-items:flex-end;gap:10px;margin-top:10px}
@@ -216,7 +216,7 @@ table.leads .foto{width:36px;height:36px;border-radius:50%;object-fit:cover;flex
     border-top:1px solid var(--border);overflow:hidden;gap:0}
   aside.sidebar .brand,aside.sidebar .nav-label,aside.sidebar .sidebar-foot .user-chip{display:none}
   aside.sidebar #nav-geral{flex:4}
-  aside.sidebar #nav-analise{flex:3}
+  aside.sidebar #nav-analise{flex:4}
   aside.sidebar .sidebar-foot{flex:1;margin-top:0}
   aside.sidebar nav,aside.sidebar .sidebar-foot{flex-direction:row;gap:0}
   .nav-item{flex:1;flex-direction:column;justify-content:center;align-items:center;gap:2px;
