@@ -51,8 +51,20 @@ Não é medição real — não use pra decidir se pode dirigir.
 
 ## Stack
 Node + Express + PostgreSQL (`pg`) no Neon, frontend HTML/CSS/JS puro (charts em SVG).
-Fotos em `uploads/`, metadados no banco. Fuso `America/Sao_Paulo` na sessão do banco.
+**Fotos guardadas no banco** (`bytea`, servidas por `/api/foto/:id` atrás do login) — roda
+em host sem disco persistente. É uma **PWA** (instalável no celular). Fuso `America/Sao_Paulo`.
+
+## Deploy (Render — grátis)
+O repositório traz um `render.yaml` (Blueprint, Node nativo, sem cartão):
+1. Em https://render.com entre com o GitHub → **New → Blueprint** → escolha este repo.
+2. O Render lê o `render.yaml` e pede os segredos: **`DATABASE_URL`** (Neon), **`AUTH_EMAIL`**,
+   **`AUTH_SENHA`**. Preencha e aplique.
+3. Sai uma URL `https://<app>.onrender.com` com HTTPS. No celular, "Adicionar à tela inicial"
+   instala a PWA.
+
+O plano free do Render dorme após 15min de inatividade (primeiro acesso ~30-60s). O workflow
+`.github/workflows/keepalive.yml` pinga `/health` de tempos em tempos pra manter acordado.
 
 ## Aviso
-O login é um **gate simples** com credencial fixa para uso do PI — **não** é autenticação
-de produção. Não exponha este app na internet.
+O login é um **gate simples** com credencial via env (`AUTH_EMAIL`/`AUTH_SENHA`) para uso do
+PI — **não** é autenticação de produção.

@@ -1,0 +1,21 @@
+# Blueprint do Render — web service grátis em Node nativo (sem cartão).
+# Os segredos (DATABASE_URL, AUTH_*) são pedidos na aplicação do blueprint (sync:false),
+# nunca ficam no repositório.
+services:
+  - type: web
+    name: cupido
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: AUTH_EMAIL
+        sync: false
+      - key: AUTH_SENHA
+        sync: false

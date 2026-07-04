@@ -1,0 +1,14 @@
+{
+  "name": "Cupido — Dating CRM",
+  "short_name": "Cupido",
+  "description": "Dashboard e CRM de conquistas: rolês, leads, cantadas e nível de álcool.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f1f0",
+  "theme_color": "#e23a52",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
