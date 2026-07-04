@@ -256,7 +256,8 @@
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
         <div><div class="card-title" style="font-size:15px">${esc(r.local || 'Sem local')}${r.aoVivo?' <span class="tag tag-good" style="font-size:10px">HOJE</span>':''}</div>
           <div class="card-sub">${formataDataCurta(r.data)}${r.titulo?' · '+esc(r.titulo):''}</div></div>
-        <div class="row-actions"><button class="mini-btn" data-editrole="${r.id}">Editar</button>
+        <div class="row-actions"><button class="mini-btn" data-bebrole="${r.id}">＋ Bebida</button>
+          <button class="mini-btn" data-editrole="${r.id}">Editar</button>
           <button class="mini-btn del" data-delrole="${r.id}">Excluir</button></div></div>
       <div style="display:flex;gap:18px;margin-top:12px;font-size:12.5px;color:var(--text-2)">
         <span><b class="mono" style="color:var(--text)">${r.leads}</b> leads</span>
@@ -342,6 +343,8 @@
     if (alcAdd) alcAdd.addEventListener('click', () => { if (state.alcoolRoleId) abrirModalBebidas(state.alcoolRoleId); });
     // rolês
     const addRole = root.querySelector('#add-role'); if (addRole) addRole.addEventListener('click', () => abrirModalRole(null));
+    root.querySelectorAll('[data-bebrole]').forEach((el) => el.addEventListener('click', () =>
+      abrirModalBebidas(Number(el.getAttribute('data-bebrole')))));
     root.querySelectorAll('[data-editrole]').forEach((el) => el.addEventListener('click', () =>
       abrirModalRole(state.roles.find((r) => String(r.id) === el.getAttribute('data-editrole')))));
     root.querySelectorAll('[data-delrole]').forEach((el) => el.addEventListener('click', async () => {
@@ -441,8 +444,6 @@
   function abrirModalLead(lead) {
     const ed = !!lead;
     let roleAtual = ed ? lead.role_id : ((state.roles[0] && state.roles[0].aoVivo) ? state.roles[0].id : null);
-    let roleAutoCriado = null; // rolê criado sob-demanda neste modal (descartar se cancelar sem salvar)
-    let criandoRole = null;    // guarda de reentrância (evita criar 2 rolês em cliques rápidos)
     const roleOpts = state.roles.map((r) => `<option value="${r.id}" ${roleAtual===r.id?'selected':''}>${esc(roleLabel(r))}</option>`).join('');
     const optsCarac = CARAC_OPTS.map((c) => `<option ${lead && lead.caracteristica===c?'selected':''}>${c}</option>`).join('');
     const optsStatus = STATUS_OPTS.map(([v,l]) => `<option value="${v}" ${lead && lead.status===v?'selected':''}>${l}</option>`).join('');
@@ -459,7 +460,7 @@
         <div id="novo-role" class="${roleAtual==null?'':'hidden'}" style="margin-top:10px">
           <div class="grid-2"><div class="field" style="margin:0"><label>Data</label><input id="f-role-data" type="date" value="${hojeInputDate()}"></div>
             <div class="field" style="margin:0"><label>Local</label>${localSelectHTML(null)}</div></div>
-          <div id="novo-role-nota" class="hidden card-sub" style="margin-top:6px">Rolê criado. Pra mudar data/local, cancele e recomece.</div></div></div>
+        </div></div>
 
       <div class="field"><label>Foto</label>
         <div class="foto-drop" id="foto-drop"><img class="foto-preview hidden" id="foto-preview">
@@ -479,57 +480,27 @@
         <datalist id="dl-cantadas">${dl}</datalist></div>
       <div class="field"><label>Data e hora (horário da foto)</label><input id="f-momento" type="datetime-local" value="${momento}"></div>
 
-      <div class="card" style="box-shadow:none;background:var(--card-2);padding:14px 16px;margin-top:4px"><div id="drinks-box">${drinkChipsHTML(null)}</div></div>
-
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="m-cancel">Cancelar</button>
         <button type="submit" class="btn btn-primary">${ed ? 'Salvar' : 'Registrar'}</button></div>
-    </form>`, () => {
-      // cancelou/fechou sem salvar lead: descarta o rolê criado sob-demanda
-      if (roleAutoCriado != null) api('/api/roles/' + roleAutoCriado, { method: 'DELETE' }).catch(() => {});
-    });
+    </form>`);
 
     const form = $('#lead-form');
     wireLocalSelect(form);
     const roleSel = $('#f-role');
-    const drinksBox = $('#drinks-box');
-    async function refreshDrinks() {
-      const resumo = roleAtual ? await api('/api/consumo?role_id=' + roleAtual) : null;
-      drinksBox.innerHTML = drinkChipsHTML(resumo);
-      wireDrinkChips(drinksBox, garantirRole, null);
-    }
-    const setNovoRoleDisabled = (v) => {
-      const di = $('#f-role-data'); if (di) di.disabled = v;
-      const ls = $('#f-local-sel', form); if (ls) ls.disabled = v;
-      const ln = $('#f-local-novo', form); if (ln) ln.disabled = v;
-      const nota = $('#novo-role-nota'); if (nota) nota.classList.toggle('hidden', !v);
-    };
-    async function garantirRole() {
-      if (roleAtual) return roleAtual;
-      if (criandoRole) return criandoRole; // já tem uma criação em andamento
-      const data = $('#f-role-data').value;
-      if (!data) { toast('Escolha a data do rolê'); return null; }
-      criandoRole = (async () => {
-        const resumo = await jpost('/api/roles', Object.assign({ data }, localFromInputs(form)));
-        roleAtual = resumo.role.id;
-        roleAutoCriado = roleAtual;
-        setNovoRoleDisabled(true); // trava data/local: mudar depois de criado não teria efeito
-        await refreshDrinks();
-        return roleAtual;
-      })();
-      try { return await criandoRole; } finally { criandoRole = null; }
-    }
-    roleSel.addEventListener('change', async () => {
-      // trocar de seleção descarta um rolê recém-criado e não confirmado
-      if (roleAutoCriado != null && String(roleAutoCriado) !== roleSel.value) {
-        api('/api/roles/' + roleAutoCriado, { method: 'DELETE' }).catch(() => {});
-        roleAutoCriado = null; setNovoRoleDisabled(false);
-      }
+    roleSel.addEventListener('change', () => {
       if (roleSel.value === 'novo') { roleAtual = null; $('#novo-role').classList.remove('hidden'); }
       else { roleAtual = Number(roleSel.value); $('#novo-role').classList.add('hidden'); }
-      await refreshDrinks();
     });
-    refreshDrinks();
+    // o rolê só é criado ao salvar o lead (nada de rolê sob-demanda / bebida aqui)
+    async function garantirRole() {
+      if (roleAtual) return roleAtual;
+      const data = $('#f-role-data').value;
+      if (!data) { toast('Escolha a data do rolê'); return null; }
+      const resumo = await jpost('/api/roles', Object.assign({ data }, localFromInputs(form)));
+      roleAtual = resumo.role.id;
+      return roleAtual;
+    }
 
     // foto (câmera + galeria)
     const prev = $('#foto-preview'), hint = $('#foto-hint');
@@ -564,7 +535,6 @@
       try {
         if (ed) await api('/api/leads/' + lead.id, { method: 'PUT', body: fd });
         else await api('/api/leads', { method: 'POST', body: fd });
-        roleAutoCriado = null; // rolê agora tem lead — não descartar no fechar
         fechar(); await recarregar(); render(); toast(ed ? 'Abordagem atualizada' : 'Abordagem registrada 🎯');
       } catch (err) { toast('Erro ao salvar: ' + err.message); }
     });
