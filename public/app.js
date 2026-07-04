@@ -224,10 +224,10 @@
         <button class="mini-btn del" data-del="${l.id}">Excluir</button></div></td>` : '';
       return `<tr>
         <td><div style="display:flex;align-items:center;gap:11px">${foto}<span class="mono" style="font-weight:600">${esc(l.codigo || '')}</span></div></td>
-        <td>${esc(l.local || '—')}</td>
-        <td class="mono">${horaDeISO(l.momento)}</td>
-        <td>${esc(l.cantada_texto || '—')}</td>
-        <td style="text-align:right"><span class="status ${esc(l.status)}">${STATUS_LABEL[l.status] || esc(l.status)}</span></td>
+        <td data-label="Local">${esc(l.local || '—')}</td>
+        <td class="mono" data-label="Horário">${horaDeISO(l.momento)}</td>
+        <td data-label="Cantada">${esc(l.cantada_texto || '—')}</td>
+        <td data-label="Status" style="text-align:right"><span class="status ${esc(l.status)}">${STATUS_LABEL[l.status] || esc(l.status)}</span></td>
         ${acoes}</tr>`;
     }).join('');
     return `<table class="leads"><thead><tr>

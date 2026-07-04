@@ -198,26 +198,54 @@ table.leads .foto{width:36px;height:36px;border-radius:50%;object-fit:cover;flex
 .seg button.on{background:var(--accent);color:#fff}
 
 @media(max-width:900px){
+  /* sidebar vira barra inferior: itens em coluna (ícone + rótulo), largura dividida, sem scroll */
   aside.sidebar{position:fixed;bottom:0;top:auto;left:0;right:0;width:100%;height:auto;flex-direction:row;
-    z-index:30;padding:6px;border-right:none;border-top:1px solid var(--border);overflow-x:auto}
+    z-index:30;padding:4px 2px calc(4px + env(safe-area-inset-bottom));border-right:none;
+    border-top:1px solid var(--border);overflow:hidden;gap:0}
   aside.sidebar .brand,aside.sidebar .nav-label,aside.sidebar .sidebar-foot .user-chip{display:none}
-  aside.sidebar nav{flex-direction:row;flex:1}
-  aside.sidebar .sidebar-foot{margin-top:0;flex-direction:row}
-  .nav-item{white-space:nowrap;font-size:12px;padding:9px 10px}
-  main.main{padding-bottom:64px}
-  header.topbar{padding:12px 14px;gap:10px}
+  aside.sidebar #nav-geral{flex:4}
+  aside.sidebar #nav-analise{flex:3}
+  aside.sidebar .sidebar-foot{flex:1;margin-top:0}
+  aside.sidebar nav,aside.sidebar .sidebar-foot{flex-direction:row;gap:0}
+  .nav-item{flex:1;flex-direction:column;justify-content:center;align-items:center;gap:2px;
+    font-size:9.5px;padding:6px 3px;min-width:0;min-height:46px;white-space:nowrap}
+  .nav-item .ic{font-size:16px;line-height:1}
+  main.main{padding-bottom:calc(66px + env(safe-area-inset-bottom))}
+  header.topbar{padding:calc(12px + env(safe-area-inset-top)) 14px 12px;gap:10px}
+  .greeting-sub{display:none}
   .topbar-right{gap:8px;min-width:0}
-  .searchbox{min-width:0;flex:1}
+  .searchbox{min-width:120px;flex:1}
   #today-pill{display:none}
-  .content{padding:16px 14px 80px}
+  .content{padding:16px 14px calc(90px + env(safe-area-inset-bottom))}
   .kpi-grid{grid-template-columns:repeat(2,1fr);gap:12px}
   .gauge-grid,.two-col{grid-template-columns:1fr}
   .cfg-grid{grid-template-columns:1fr}
+  .grid-2{grid-template-columns:1fr}
   .drink-chips{grid-template-columns:1fr}
-  .modal{max-width:100%}
-  .fab{right:16px;bottom:74px}
+  .round-btn{width:40px;height:40px;font-size:20px}
+  .mini-btn{padding:9px 12px;min-height:40px}
+  .row-actions{gap:10px}
+  .modal-backdrop{align-items:flex-start;padding:12px}
+  .modal{max-width:100%;max-height:calc(100dvh - 24px)}
+  .fab{right:16px;bottom:calc(80px + env(safe-area-inset-bottom))}
+}
+/* tablet: gauge volta a 2 colunas pra não ficar "oco" */
+@media(min-width:600px) and (max-width:900px){
+  .gauge-grid{grid-template-columns:1fr 1fr}
+}
+/* só no celular a tabela de leads vira cards — e com rótulo por linha */
+@media(max-width:600px){
   table.leads thead{display:none}
   table.leads,table.leads tbody,table.leads tr,table.leads td{display:block;width:100%}
-  table.leads tr{border:1px solid var(--border);border-radius:12px;margin-bottom:10px;padding:6px 10px}
-  table.leads tbody td{border:none;padding:5px 0;text-align:left !important}
+  table.leads tr{border:1px solid var(--border);border-radius:12px;margin-bottom:10px;padding:8px 12px}
+  table.leads tbody td{border:none;padding:5px 0;text-align:right !important}
+  table.leads tbody td:first-child{text-align:left !important}
+  table.leads tbody td[data-label]{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  table.leads tbody td[data-label]::before{content:attr(data-label);color:var(--text-3);font-weight:600;font-size:12px}
+}
+/* celular estreito: barra inferior só com ícones */
+@media(max-width:560px){
+  .nav-item .lbl{display:none}
+  .nav-item{min-height:50px}
+  .nav-item .ic{font-size:19px}
 }

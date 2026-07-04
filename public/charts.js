@@ -78,10 +78,10 @@
     const gridVals = [0, 0.25, 0.5, 0.75, 1].map((g) => Math.round(maxY * g));
     const grid = gridVals.map((g) =>
       `<line x1="${l}" y1="${Y(g)}" x2="${W - rp}" y2="${Y(g)}" stroke="var(--border-2)" stroke-width="1"/>
-       <text x="${l - 8}" y="${(Y(g) + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--text-3)" font-family="Space Grotesk">${g}</text>`
+       <text x="${l - 8}" y="${(Y(g) + 3).toFixed(1)}" text-anchor="end" font-size="13" fill="var(--text-3)" font-family="Space Grotesk">${g}</text>`
     ).join('');
     const mlabels = meses.map((m, i) =>
-      `<text x="${X(i).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="10.5" fill="var(--text-3)">${m}</text>`
+      `<text x="${X(i).toFixed(1)}" y="${H - 10}" text-anchor="middle" font-size="14" fill="var(--text-3)">${m}</text>`
     ).join('');
     const dots = cp.map((p) =>
       `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.2" fill="var(--card)" stroke="var(--accent)" stroke-width="2.4"/>`
