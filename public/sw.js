@@ -1,6 +1,7 @@
-// Service worker do Cupido — deixa o app instalável e o shell instantâneo no mobile,
-// mesmo enquanto o servidor "acorda". Nunca cacheia /api (dados sempre frescos).
-const CACHE = 'cupido-v1';
+// Service worker do Cupido — instalável + offline, SEM servir versão velha.
+// Estratégia network-first: online sempre pega o arquivo mais novo (atualizações
+// aparecem na hora); offline cai no cache. Nunca cacheia /api (dados sempre frescos).
+const CACHE = 'cupido-v2';
 const SHELL = [
   '/', '/index.html', '/styles.css', '/app.js', '/charts.js', '/exif.js', '/bac.js',
   '/manifest.webmanifest', '/icon.svg',
@@ -18,18 +19,16 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
-  // só mexe em GET da mesma origem; dados/foto (/api) e /health vão sempre à rede
-  if (req.method !== 'GET' || url.origin !== location.origin ||
-      url.pathname.startsWith('/api') || url.pathname === '/health') return;
-  // stale-while-revalidate: responde do cache na hora e atualiza em segundo plano
+  if (req.method !== 'GET' || url.origin !== location.origin) return;      // API/externos → rede direto
+  if (url.pathname.startsWith('/api') || url.pathname === '/health') return; // dados nunca cacheados
+  // network-first: sempre tenta a versão mais nova e atualiza o cache; offline → cache (ou index)
   e.respondWith(
-    caches.open(CACHE).then(async (cache) => {
-      const cached = await cache.match(req);
-      const network = fetch(req).then((res) => {
-        if (res && res.status === 200 && res.type === 'basic') cache.put(req, res.clone());
-        return res;
-      }).catch(() => cached);
-      return cached || network;
-    })
+    fetch(req).then((res) => {
+      if (res && res.status === 200 && res.type === 'basic') {
+        const clone = res.clone();
+        caches.open(CACHE).then((c) => c.put(req, clone));
+      }
+      return res;
+    }).catch(() => caches.match(req).then((c) => c || caches.match('/')))
   );
 });
