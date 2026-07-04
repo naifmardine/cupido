@@ -47,10 +47,10 @@ function lerSessao(token) {
 const STATUS_VALIDOS = new Set(['convertida', 'em_conversa', 'fora']);
 const manter = (v) => (v === undefined || v === null || v === '') ? null : v;
 const posInt = (v) => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
-const hojeStr = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+// fuso explícito nas queries — robusto mesmo se a sessão do banco não estiver em BRT (ex.: pooler)
+const TZBR = "'America/Sao_Paulo'";
+const HOJE_BR = `(now() AT TIME ZONE ${TZBR})::date`;        // "hoje" em Brasília
+const HORA_BR = (col) => `EXTRACT(HOUR FROM ${col} AT TIME ZONE ${TZBR})::int`;
 const DENS_ETANOL = 0.789;
 const BETA = 0.15; // g/L eliminados por hora
 
@@ -87,9 +87,12 @@ app.get('/health', (_req, res) => res.type('text').send('ok'));
 // serve a foto guardada no banco (privada, atrás do login)
 app.get('/api/foto/:id', requireAuth, async (req, res, next) => {
   try {
-    const { rows } = await query(`SELECT mime, bytes FROM fotos WHERE id = $1`, [req.params.id]);
+    const id = posInt(req.params.id);
+    if (!id) return res.status(404).end();
+    const { rows } = await query(`SELECT mime, bytes FROM fotos WHERE id = $1`, [id]);
     if (!rows.length) return res.status(404).end();
     res.set('Content-Type', rows[0].mime || 'image/jpeg');
+    res.set('X-Content-Type-Options', 'nosniff');
     res.set('Cache-Control', 'private, max-age=31536000');
     res.send(rows[0].bytes);
   } catch (e) { next(e); }
@@ -142,7 +145,7 @@ async function resolveRole(b) {
 async function resumoRole(roleId) {
   const rq = await query(
     `SELECT r.id, r.data::text AS data, r.local_id, lo.nome AS local, r.titulo,
-            (r.data = CURRENT_DATE) AS ao_vivo
+            (r.data = ${HOJE_BR}) AS ao_vivo
        FROM roles r LEFT JOIN locais lo ON lo.id = r.local_id WHERE r.id = $1`, [roleId]);
   if (!rq.rows.length) return null;
   const role = rq.rows[0];
@@ -451,25 +454,29 @@ app.put('/api/leads/:id', requireAuth, upload.single('foto'), async (req, res, n
     }
     const momento = b.momento ? new Date(b.momento) : null;
     const roleId = posInt(b.role_id);
-    const cantadaId = (b.cantada_id || b.cantada_texto) ? await resolveCantada(b) : null;
     const statusNovo = STATUS_VALIDOS.has(b.status) ? b.status : null;
+    // "campo enviado vazio" limpa; "campo ausente" mantém (permite editar status inline sem apagar o resto)
+    const cantProvided = b.cantada_id !== undefined || b.cantada_texto !== undefined;
+    const cantVal = cantProvided ? await resolveCantada(b) : null;
+    const objProvided = b.objecao !== undefined;
+    const objVal = (b.objecao && String(b.objecao).trim()) ? String(b.objecao).trim() : null;
     const { rows } = await query(
       `UPDATE leads SET
          role_id = COALESCE($1, role_id),
          caracteristica = COALESCE($2, caracteristica),
-         cantada_id = COALESCE($3, cantada_id),
-         status = COALESCE($4, status),
-         momento = COALESCE($5, momento),
-         foto_path = COALESCE($6, foto_path),
-         objecao = COALESCE($7, objecao),
+         cantada_id = CASE WHEN $3::bool THEN $4 ELSE cantada_id END,
+         status = COALESCE($5, status),
+         momento = COALESCE($6, momento),
+         foto_path = COALESCE($7, foto_path),
+         objecao = CASE WHEN $8::bool THEN $9 ELSE objecao END,
          convertida_em = CASE
-           WHEN $4 IS NULL THEN convertida_em
-           WHEN $4 = 'convertida' THEN COALESCE(convertida_em, now())
+           WHEN $5 IS NULL THEN convertida_em
+           WHEN $5 = 'convertida' THEN COALESCE(convertida_em, now())
            ELSE NULL END
-       WHERE id=$8 RETURNING id`,
-      [roleId, manter(b.caracteristica), cantadaId,
-       statusNovo, momento, fotoPath, manter(b.objecao), req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'nao_encontrado' });
+       WHERE id=$10 RETURNING id`,
+      [roleId, manter(b.caracteristica), cantProvided, cantVal,
+       statusNovo, momento, fotoPath, objProvided, objVal, req.params.id]);
+    if (!rows.length) { if (fotoPath) await apagarFotosDe([fotoPath]).catch(() => {}); return res.status(404).json({ error: 'nao_encontrado' }); }
     if (fotoPath && fotoAntiga && fotoAntiga !== fotoPath) await apagarFotosDe([fotoAntiga]);
     const out = await query(`${LEAD_SELECT} WHERE l.id=$1`, [req.params.id]);
     res.json(out.rows[0]);
@@ -494,9 +501,9 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
     // KPIs do mês corrente (por data do rolê)
     const mes = await query(`
       SELECT
-        count(l.*) FILTER (WHERE date_trunc('month', r.data) = date_trunc('month', CURRENT_DATE))                       AS abordagens_mes,
-        count(l.*) FILTER (WHERE l.status='convertida' AND date_trunc('month', r.data)=date_trunc('month', CURRENT_DATE)) AS conversoes_mes,
-        count(DISTINCT l.cantada_id) FILTER (WHERE date_trunc('month', r.data)=date_trunc('month', CURRENT_DATE))       AS cantadas_usadas
+        count(l.*) FILTER (WHERE date_trunc('month', r.data) = date_trunc('month', ${HOJE_BR}))                       AS abordagens_mes,
+        count(l.*) FILTER (WHERE l.status='convertida' AND date_trunc('month', r.data)=date_trunc('month', ${HOJE_BR})) AS conversoes_mes,
+        count(DISTINCT l.cantada_id) FILTER (WHERE date_trunc('month', r.data)=date_trunc('month', ${HOJE_BR}))       AS cantadas_usadas
       FROM leads l JOIN roles r ON r.id=l.role_id`);
     const m = mes.rows[0];
     const abordagensMes = Number(m.abordagens_mes);
@@ -519,7 +526,7 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
         FROM leads l JOIN roles r ON r.id=l.role_id LEFT JOIN locais lo ON lo.id=r.local_id
        WHERE l.status='convertida' GROUP BY 1 ORDER BY n DESC LIMIT 5`);
 
-    const yr = (await query(`SELECT EXTRACT(YEAR FROM CURRENT_DATE)::int AS yr`)).rows[0].yr; // ano em BRT
+    const yr = (await query(`SELECT EXTRACT(YEAR FROM ${HOJE_BR})::int AS yr`)).rows[0].yr; // ano em BRT
     const linhaQ = await query(`
       SELECT EXTRACT(YEAR FROM r.data)::int AS yr, EXTRACT(MONTH FROM r.data)::int AS mo, count(*) AS n
         FROM leads l JOIN roles r ON r.id=l.role_id
@@ -533,11 +540,12 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
 
     const cantadasQ = await query(`${CANTADA_SELECT} ORDER BY taxa DESC, tentativas DESC LIMIT 6`);
     const horaQ = await query(`
-      SELECT EXTRACT(HOUR FROM momento)::int AS hora, count(*) AS n
-        FROM leads WHERE status='convertida' GROUP BY 1 ORDER BY n DESC`);
+      SELECT ${HORA_BR('momento')} AS hora, count(*)::int AS total,
+             count(*) FILTER (WHERE status='convertida')::int AS convertidas
+        FROM leads GROUP BY 1 ORDER BY 1`);
     // lead time médio (abordagem → conversão)
-    const ltQ = await query(`SELECT AVG(GREATEST(0, EXTRACT(EPOCH FROM (convertida_em - momento))))::float AS seg
-                               FROM leads WHERE status='convertida' AND convertida_em IS NOT NULL`);
+    const ltQ = await query(`SELECT AVG(EXTRACT(EPOCH FROM (convertida_em - momento)))::float AS seg
+                               FROM leads WHERE status='convertida' AND convertida_em > momento`);
     const leadTimeMedioSeg = ltQ.rows[0].seg != null ? Math.round(ltQ.rows[0].seg) : null;
 
     res.json({
@@ -548,7 +556,7 @@ app.get('/api/metrics', requireAuth, async (_req, res, next) => {
       locais: locaisQ.rows.map((r) => ({ local: r.local, n: Number(r.n) })),
       linha: { meses: ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'], atual, anterior },
       cantadas: cantadasQ.rows.map((r) => ({ texto: r.texto, tentativas: Number(r.tentativas), sucessos: Number(r.sucessos), taxa: Number(r.taxa) })),
-      melhorHorario: horaQ.rows.map((r) => ({ hora: Number(r.hora), n: Number(r.n) })),
+      melhorHorario: horaQ.rows.map((r) => ({ hora: Number(r.hora), total: Number(r.total), convertidas: Number(r.convertidas), taxa: r.total > 0 ? Math.round(100 * r.convertidas / r.total) : 0 })),
     });
   } catch (e) { next(e); }
 });
@@ -562,40 +570,66 @@ app.get('/api/objecoes', requireAuth, async (_req, res, next) => {
     res.json(rows.map((r) => r.objecao));
   } catch (e) { next(e); }
 });
-// agregações de objeções + funil + lead time
+// agregações de objeções + funil + lead time + cortes de conversão
 app.get('/api/inteligencia', requireAuth, async (_req, res, next) => {
   try {
+    const taxaDe = (r) => r.total > 0 ? Math.round(100 * r.convertidas / r.total) : 0;
     const obj = await query(`
       SELECT objecao, count(*)::int AS n FROM leads
        WHERE objecao IS NOT NULL AND objecao <> '' GROUP BY objecao ORDER BY n DESC`);
+    // LEFT JOIN + rótulo pra não esconder leads sem cantada/local (fecha com o funil)
     const porCantada = await query(`
-      SELECT c.texto AS cantada, count(l.*)::int AS total,
-             count(*) FILTER (WHERE l.objecao IS NOT NULL AND l.objecao<>'')::int AS com_objecao,
+      SELECT COALESCE(c.texto,'(sem cantada)') AS cantada, count(l.*)::int AS total,
              count(*) FILTER (WHERE l.status='convertida')::int AS convertidas,
              mode() WITHIN GROUP (ORDER BY NULLIF(l.objecao,'')) AS objecao_top
-        FROM leads l JOIN cantadas c ON c.id=l.cantada_id
-       GROUP BY c.texto ORDER BY total DESC`);
+        FROM leads l LEFT JOIN cantadas c ON c.id=l.cantada_id
+       GROUP BY 1 ORDER BY total DESC`);
     const porLocal = await query(`
-      SELECT lo.nome AS local, count(l.*)::int AS total,
-             count(*) FILTER (WHERE l.objecao IS NOT NULL AND l.objecao<>'')::int AS com_objecao,
+      SELECT COALESCE(lo.nome,'(sem local)') AS local, count(l.*)::int AS total,
              count(*) FILTER (WHERE l.status='convertida')::int AS convertidas,
              mode() WITHIN GROUP (ORDER BY NULLIF(l.objecao,'')) AS objecao_top
-        FROM leads l JOIN roles r ON r.id=l.role_id JOIN locais lo ON lo.id=r.local_id
-       GROUP BY lo.nome ORDER BY total DESC`);
+        FROM leads l JOIN roles r ON r.id=l.role_id LEFT JOIN locais lo ON lo.id=r.local_id
+       GROUP BY 1 ORDER BY total DESC`);
     const fu = (await query(`
       SELECT count(*)::int AS abordagens,
              count(*) FILTER (WHERE status IN ('em_conversa','convertida'))::int AS engajou,
              count(*) FILTER (WHERE status='convertida')::int AS convertidas,
              count(*) FILTER (WHERE status='fora')::int AS fora
         FROM leads`)).rows[0];
-    const lt = (await query(`SELECT AVG(GREATEST(0, EXTRACT(EPOCH FROM (convertida_em - momento))))::float AS seg
-                               FROM leads WHERE convertida_em IS NOT NULL`)).rows[0];
+    // lead time só sobre conversões reais (exclui as instantâneas = nasceu convertida)
+    const lt = (await query(`SELECT AVG(EXTRACT(EPOCH FROM (convertida_em - momento)))::float AS seg,
+                                    count(*)::int AS n
+                               FROM leads WHERE convertida_em > momento`)).rows[0];
+    // conversão por faixa de doses do rolê (proxy do BAC — o "sweet spot")
+    const porAlcool = await query(`
+      SELECT f.faixa, f.ord, count(*)::int AS total,
+             count(*) FILTER (WHERE x.status='convertida')::int AS convertidas
+        FROM (SELECT l.status, (SELECT count(*) FROM consumo c WHERE c.role_id=l.role_id) AS doses FROM leads l) x
+        CROSS JOIN LATERAL (SELECT
+             CASE WHEN x.doses=0 THEN '0 (sóbrio)' WHEN x.doses<=2 THEN '1-2 doses'
+                  WHEN x.doses<=4 THEN '3-4 doses' WHEN x.doses<=6 THEN '5-6 doses' ELSE '7+ doses' END AS faixa,
+             CASE WHEN x.doses=0 THEN 0 WHEN x.doses<=2 THEN 1 WHEN x.doses<=4 THEN 2 WHEN x.doses<=6 THEN 3 ELSE 4 END AS ord) f
+       GROUP BY f.faixa, f.ord ORDER BY f.ord`);
+    // conversão com vs sem objeção
+    const comSem = await query(`
+      SELECT (objecao IS NOT NULL AND objecao<>'') AS teve, count(*)::int AS total,
+             count(*) FILTER (WHERE status='convertida')::int AS convertidas
+        FROM leads GROUP BY 1`);
+    // conversão por dia da semana (BRT)
+    const porDia = await query(`
+      SELECT EXTRACT(DOW FROM momento AT TIME ZONE ${TZBR})::int AS dow, count(*)::int AS total,
+             count(*) FILTER (WHERE status='convertida')::int AS convertidas
+        FROM leads GROUP BY 1 ORDER BY 1`);
     res.json({
       objecoes: obj.rows.map((r) => ({ objecao: r.objecao, n: r.n })),
-      porCantada: porCantada.rows.map((r) => ({ cantada: r.cantada, total: r.total, comObjecao: r.com_objecao, convertidas: r.convertidas, objecaoTop: r.objecao_top })),
-      porLocal: porLocal.rows.map((r) => ({ local: r.local, total: r.total, comObjecao: r.com_objecao, convertidas: r.convertidas, objecaoTop: r.objecao_top })),
+      porCantada: porCantada.rows.map((r) => ({ cantada: r.cantada, total: r.total, convertidas: r.convertidas, taxa: taxaDe(r), objecaoTop: r.objecao_top })),
+      porLocal: porLocal.rows.map((r) => ({ local: r.local, total: r.total, convertidas: r.convertidas, taxa: taxaDe(r), objecaoTop: r.objecao_top })),
       funil: fu,
       leadTimeMedioSeg: lt.seg != null ? Math.round(lt.seg) : null,
+      leadTimeN: lt.n,
+      porAlcool: porAlcool.rows.map((r) => ({ faixa: r.faixa, total: r.total, convertidas: r.convertidas, taxa: taxaDe(r) })),
+      comSemObjecao: comSem.rows.map((r) => ({ teve: r.teve, total: r.total, convertidas: r.convertidas, taxa: taxaDe(r) })),
+      porDia: porDia.rows.map((r) => ({ dow: Number(r.dow), total: r.total, convertidas: r.convertidas, taxa: taxaDe(r) })),
     });
   } catch (e) { next(e); }
 });

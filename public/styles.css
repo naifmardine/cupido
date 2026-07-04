@@ -118,6 +118,14 @@ header.topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(
 .legend-item .val{margin-left:auto;color:var(--text-2)}
 
 .two-col{display:grid;grid-template-columns:minmax(0,1.9fr) minmax(0,1fr);gap:20px;align-items:stretch}
+.two-col.even{grid-template-columns:1fr 1fr}
+.insights{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}
+.insights li{font-size:14px;line-height:1.45;padding:11px 13px;border-radius:12px;background:var(--neutral-soft);border:1px solid var(--border)}
+.insights b{color:var(--accent-2)}
+.empty-hero{text-align:center;padding:44px 24px}
+.empty-emoji{font-size:46px;line-height:1;margin-bottom:12px}
+.empty-hero .empty-msg{max-width:440px;margin:8px auto 0}
+.empty-hero #empty-add{width:auto;padding:12px 22px;margin-top:20px}
 .rank{display:flex;flex-direction:column;gap:15px;margin-top:16px}
 .rank-head{display:flex;align-items:center;gap:10px;font-size:13px;margin-bottom:7px}
 .rank-num{font-family:'Space Grotesk';font-weight:700;color:var(--text-3);width:16px}
@@ -133,6 +141,9 @@ table.leads .foto{width:36px;height:36px;border-radius:50%;object-fit:cover;flex
 .foto-ph{display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--text-3)}
 .mono{font-family:'Space Grotesk'}
 .status{font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:20px}
+.status-btn{border:1px solid transparent;cursor:pointer;font-family:inherit;transition:filter .12s,transform .12s}
+.status-btn:hover{filter:brightness(1.06)}
+.status-btn:active{transform:scale(.94)}
 .status.convertida{color:var(--good);background:var(--good-soft)}
 .status.em_conversa{color:var(--warn);background:var(--warn-soft)}
 .status.fora{color:var(--text-2);background:var(--neutral-soft)}

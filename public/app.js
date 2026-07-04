@@ -41,8 +41,12 @@
   const MESES_ABR = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
   const DIAS_ABR = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
   const p2 = (n) => String(n).padStart(2, '0');
-  const paraInputLocal = (d) => `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`;
-  const horaDeISO = (iso) => { const d = new Date(iso); return `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+  // tudo em BRT explícito (Brasil não tem horário de verão → offset fixo -03:00), independe do fuso do aparelho
+  const TZ_BR = 'America/Sao_Paulo';
+  const partesBRT = (d) => { const p = {}; new Intl.DateTimeFormat('en-CA', { timeZone: TZ_BR, hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(d).forEach((x) => { p[x.type] = x.value; }); return p; };
+  const paraInputLocal = (d) => { const p = partesBRT(d); return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`; };
+  const horaDeISO = (iso) => { const p = partesBRT(new Date(iso)); return `${p.hour}:${p.minute}`; };
+  const momentoParaISO = (val) => val ? new Date(val + ':00-03:00').toISOString() : ''; // datetime-local interpretado como BRT
   const fmtBac = (v) => String(Number(v || 0).toFixed(2)).replace('.', ',');
   function fmtDuracao(seg) { // segundos → "2d 4h", "3h 20min", "45min", "< 1min"
     if (seg == null) return '—';
@@ -79,8 +83,9 @@
 
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault(); $('#login-err').textContent = '';
-    try { await jpost('/api/login', { email: $('#login-email').value.trim(), password: $('#login-pass').value }); await iniciarApp(); }
-    catch (err) { $('#login-err').textContent = 'E-mail ou senha incorretos.'; }
+    try { await jpost('/api/login', { email: $('#login-email').value.trim(), password: $('#login-pass').value }); }
+    catch (err) { $('#login-err').textContent = 'E-mail ou senha incorretos.'; return; }
+    try { await iniciarApp(); } catch (e) { toast('Falha ao carregar. Tente recarregar.'); }
   });
   $('#btn-logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST' }); } catch (e) {} mostrarLogin(); });
 
@@ -97,10 +102,25 @@
     state.alcoolResumo = state.alcoolRoleId ? await api('/api/consumo?role_id=' + state.alcoolRoleId) : null;
   }
   async function iniciarApp() { mostrarApp(); await recarregar(); montarTopo(); render(); }
+  // executa uma mutação, recarrega e re-renderiza; distingue "falhou ao salvar" de "salvou mas falhou o refresh"
+  async function comFeedback(fn, okMsg, errMap) {
+    let salvou = false;
+    try {
+      await fn();
+      salvou = true; // a partir daqui a mutação JÁ foi gravada
+      await recarregar(); render();
+      if (okMsg) toast(okMsg);
+    } catch (e) {
+      if (salvou) { try { render(); } catch (_) {} toast('Salvo! Mas falhou ao atualizar a tela — recarregue.'); }
+      else toast((errMap && errMap[e.message]) || 'Erro ao salvar. Tente de novo.');
+    }
+  }
+  const DOW_MAP = { Sun: 'Dom', Mon: 'Seg', Tue: 'Ter', Wed: 'Qua', Thu: 'Qui', Fri: 'Sex', Sat: 'Sáb' };
   function montarTopo() {
-    const now = new Date(), h = now.getHours();
+    const now = new Date(), p = partesBRT(now), h = Number(p.hour);
     $('#greeting').textContent = (h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite') + ', Pi';
-    $('#today-pill').textContent = `${DIAS_ABR[now.getDay()]}, ${p2(now.getDate())} ${MESES_ABR[now.getMonth()].replace(/^./,c=>c.toUpperCase())} · ${now.getFullYear()}`;
+    const dow = new Intl.DateTimeFormat('en-US', { timeZone: TZ_BR, weekday: 'short' }).format(now);
+    $('#today-pill').textContent = `${DOW_MAP[dow]}, ${p.day} ${MESES_ABR[Number(p.month)-1].replace(/^./,c=>c.toUpperCase())} · ${p.year}`;
   }
 
   // ---------- NAV ----------
@@ -128,8 +148,8 @@
     const v = state.view;
     if (v === 'dashboard') root.innerHTML = viewDashboard();
     else if (v === 'roles') root.innerHTML = viewRoles();
-    else if (v === 'leads') root.innerHTML = viewLeads('Leads — Abordagens', state.leads);
-    else if (v === 'conversoes') root.innerHTML = viewLeads('Conversões', state.leads.filter((l) => l.status === 'convertida'));
+    else if (v === 'leads') root.innerHTML = viewLeads('Leads — Abordagens', state.leads, true);
+    else if (v === 'conversoes') root.innerHTML = viewLeads('Conversões', state.leads.filter((l) => l.status === 'convertida'), false);
     else if (v === 'cantadas') root.innerHTML = viewCantadas();
     else if (v === 'locais') root.innerHTML = viewLocais();
     else if (v === 'inteligencia') root.innerHTML = viewInteligencia();
@@ -140,7 +160,19 @@
   // ---------- DASHBOARD ----------
   function viewDashboard() {
     const m = state.metrics;
-    const diasMes = new Date(new Date().getFullYear(), new Date().getMonth()+1, 0).getDate();
+    // fresh: sem nenhum lead ainda → onboarding em vez de KPIs zerados
+    if (!state.leads.length) {
+      return `<div class="card empty-hero">
+        <div class="empty-emoji">🎯</div>
+        <div class="card-title" style="font-size:20px">Bora começar, Pi</div>
+        <div class="card-sub empty-msg">Cada abordagem vira dado: horário, local, cantada e resultado. Registre a primeira e o painel ganha vida — taxa de conversão, melhor horário, sweet spot de álcool e mais.</div>
+        <button class="btn btn-primary" id="empty-add">+ Registrar 1ª abordagem</button>
+        <div class="card-sub" style="margin-top:14px">Dica: crie seus <b>locais</b> e <b>cantadas</b> primeiro pra escolher rápido depois.</div>
+      </div>`;
+    }
+    // dias do mês em BRT (casa com abordagensMes, que o server conta no mês de Brasília)
+    const pBR = partesBRT(new Date());
+    const diasMes = new Date(Number(pBR.year), Number(pBR.month), 0).getDate();
     const porDia = (m.kpis.abordagensMes / diasMes).toFixed(1).replace('.', ',');
     const kpi = (label, num, foot) => `<div class="kpi"><div class="kpi-label">${label}</div>
       <div class="kpi-row"><div class="kpi-num">${num}</div></div><div class="kpi-foot">${foot}</div></div>`;
@@ -163,8 +195,12 @@
     const locais = m.locais.map((l, i) => `<div><div class="rank-head"><span class="rank-num">${i+1}</span>
       <span style="font-weight:600">${esc(l.local)}</span><span class="rank-val">${l.n}</span></div>
       <div class="bar"><span style="width:${Math.round(100*l.n/maxLocal)}%"></span></div></div>`).join('');
-    const melhor = m.melhorHorario && m.melhorHorario[0];
-    const melhorTxt = melhor ? `Melhor horário: ${p2(melhor.hora)}h` : '';
+    // melhor horário por TAXA (não contagem), com mínimo de 2 abordagens pra não dar 100% de 1 lead
+    const horasCand = (m.melhorHorario || []).filter((x) => x.total > 0);
+    const horasMin = horasCand.filter((x) => x.total >= 2);
+    const poolH = horasMin.length ? horasMin : horasCand;
+    const melhor = poolH.length ? poolH.reduce((a, b) => (b.taxa > a.taxa || (b.taxa === a.taxa && b.total > a.total)) ? b : a) : null;
+    const melhorTxt = melhor && melhor.taxa > 0 ? `Melhor horário: ${p2(melhor.hora)}h (${melhor.taxa}%)` : '';
     const cantadas = m.cantadas.map((c) => { const cls = c.taxa>=60?'var(--good)':c.taxa>=45?'var(--warn)':'var(--danger)';
       return `<div><div style="display:flex;align-items:baseline;gap:10px;margin-bottom:7px">
         <span class="cantada-txt">"${esc(c.texto)}"</span><span class="cantada-taxa" style="color:${cls}">${c.taxa}%</span></div>
@@ -243,7 +279,7 @@
   }
 
   // ---------- TABELA DE LEADS ----------
-  function tabelaLeads(leads, comAcoes) {
+  function tabelaLeads(leads, comAcoes, statusClicavel) {
     const linhas = leads.map((l) => {
       const foto = l.foto_path ? `<img class="foto" src="${esc(l.foto_path)}" alt="">` : `<div class="foto foto-ph">foto</div>`;
       const acoes = comAcoes ? `<td><div class="row-actions">
@@ -254,7 +290,9 @@
         <td data-label="Local">${esc(l.local || '—')}</td>
         <td class="mono" data-label="Horário">${horaDeISO(l.momento)}</td>
         <td data-label="Cantada">${esc(l.cantada_texto || '—')}</td>
-        <td data-label="Status" style="text-align:right"><span class="status ${esc(l.status)}">${STATUS_LABEL[l.status] || esc(l.status)}</span></td>
+        <td data-label="Status" style="text-align:right">${comAcoes && statusClicavel
+          ? `<button class="status ${esc(l.status)} status-btn" data-cyclestatus="${l.id}" title="Clique pra mudar o status">${STATUS_LABEL[l.status] || esc(l.status)}</button>`
+          : `<span class="status ${esc(l.status)}">${STATUS_LABEL[l.status] || esc(l.status)}</span>`}</td>
         ${acoes}</tr>`;
     }).join('');
     return `<table class="leads"><thead><tr>
@@ -263,10 +301,10 @@
   }
   const filtrar = (leads) => !state.busca ? leads : leads.filter((l) =>
     [l.codigo, l.local, l.cantada_texto, l.caracteristica].some((v) => String(v||'').toLowerCase().includes(state.busca)));
-  function viewLeads(titulo, leads) {
+  function viewLeads(titulo, leads, statusClicavel) {
     return `<div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
       <div><div class="card-title">${titulo}</div><div class="card-sub">${leads.length} registro(s) · clique no + pra adicionar</div></div></div>
-      ${tabelaLeads(filtrar(leads), true)}</div>`;
+      ${tabelaLeads(filtrar(leads), true, statusClicavel !== false)}</div>`;
   }
 
   // ---------- ROLÊS ----------
@@ -322,15 +360,58 @@
     <div class="kpi-row"><div class="kpi-num">${num}</div></div><div class="kpi-foot">${foot}</div></div>`;
 
   function viewInteligencia() {
-    const it = state.inteligencia || { objecoes: [], porCantada: [], porLocal: [], funil: {}, leadTimeMedioSeg: null };
+    const it = state.inteligencia || {};
+    it.objecoes = it.objecoes || []; it.porCantada = it.porCantada || []; it.porLocal = it.porLocal || [];
+    it.porAlcool = it.porAlcool || []; it.porDia = it.porDia || []; it.comSemObjecao = it.comSemObjecao || [];
     const f = it.funil || {};
     const totalLeads = f.abordagens || 0;
     const taxa = totalLeads ? Math.round(100 * (f.convertidas || 0) / totalLeads) : 0;
+    const DOW_NOME = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+    // melhor linha por TAXA — estrito (mín. 2 leads), pra insight não premiar amostra de 1
+    const melhorPorTaxa = (rows) => {
+      const pool = (rows || []).filter((r) => r.total >= 2);
+      if (!pool.length) return null;
+      return pool.reduce((a, b) => (b.taxa > a.taxa || (b.taxa === a.taxa && b.total > a.total)) ? b : a);
+    };
 
     const head = `<section class="kpi-grid" style="margin-bottom:20px">
       ${kpiHTML('Leads', totalLeads, 'abordagens registradas')}
       ${kpiHTML('Taxa de conversão', taxa + '%', (f.convertidas || 0) + ' convertidas')}
       ${kpiHTML('Tempo até conquistar', fmtDuracao(it.leadTimeMedioSeg), 'média da abordagem à conversão')}</section>`;
+
+    // ---- síntese de insights (auto-gerada dos dados) ----
+    const insights = [];
+    const bestDia = melhorPorTaxa(it.porDia);
+    if (bestDia && bestDia.taxa > 0) insights.push(`📅 Melhor dia: <b>${DOW_NOME[bestDia.dow]}</b> — ${bestDia.taxa}% (${bestDia.convertidas}/${bestDia.total})`);
+    const bestAlc = melhorPorTaxa(it.porAlcool);
+    if (bestAlc && bestAlc.taxa > 0) insights.push(`🍺 Sweet spot de álcool: <b>${esc(bestAlc.faixa)}</b> — ${bestAlc.taxa}% de conversão`);
+    // exclui os buckets sintéticos "(sem cantada)"/"(sem local)" do insight (não faz sentido "a cantada que mais fecha é: nenhuma")
+    const bestCant = melhorPorTaxa(it.porCantada.filter((r) => r.cantada !== '(sem cantada)'));
+    if (bestCant && bestCant.taxa > 0) insights.push(`💬 Cantada que mais fecha: <b>${esc(bestCant.cantada)}</b> — ${bestCant.taxa}%`);
+    const bestLoc = melhorPorTaxa(it.porLocal.filter((r) => r.local !== '(sem local)'));
+    if (bestLoc && bestLoc.taxa > 0) insights.push(`📍 Local mais quente: <b>${esc(bestLoc.local)}</b> — ${bestLoc.taxa}%`);
+    // guarda de amostra mínima (2×), coerente com os outros insights
+    if (it.objecoes.length && it.objecoes[0].n >= 2) insights.push(`🚧 Maior obstáculo: <b>${esc(it.objecoes[0].objecao)}</b> (${it.objecoes[0].n}×) — trabalha essa resposta`);
+    const insightCard = insights.length ? `<div class="card" style="margin-bottom:20px">
+      <div class="card-title">💡 Insights pra fechar mais</div>
+      <div class="card-sub">Gerado dos seus dados — foca no que converte</div>
+      <ul class="insights">${insights.map((s) => `<li>${s}</li>`).join('')}</ul></div>`
+      : `<div class="card" style="margin-bottom:20px"><div class="card-title">💡 Insights pra fechar mais</div>
+      <div class="card-sub">Registre mais abordagens (com cantada, local e objeção) e os insights aparecem aqui.</div></div>`;
+
+    // barras por taxa de conversão (reusa .bar do funil)
+    const barsTaxa = (rows, fmtLabel) => {
+      if (!rows || !rows.length) return '<span class="card-sub">Sem dados ainda</span>';
+      const max = Math.max(1, ...rows.map((r) => r.taxa));
+      return rows.map((r) => {
+        const lbl = fmtLabel ? fmtLabel(r) : r.faixa;
+        return `<div style="margin-bottom:12px"><div class="rank-head"><span style="font-weight:600">${esc(String(lbl))}</span>
+          <span class="rank-val">${r.taxa}% <span style="color:var(--text-3);font-weight:500">· ${r.convertidas}/${r.total}</span></span></div>
+          <div class="bar"><span style="width:${Math.round(100 * r.taxa / max)}%"></span></div></div>`;
+      }).join('');
+    };
+    const comSemRows = it.comSemObjecao.map((r) => ({ ...r, faixa: r.teve ? 'Com objeção declarada' : 'Sem objeção' }));
 
     const stages = [['Abordagens', f.abordagens || 0], ['Engajou (em conversa+)', f.engajou || 0], ['Convertidas', f.convertidas || 0]];
     const maxF = Math.max(1, ...stages.map((s) => s[1]));
@@ -364,15 +445,26 @@
     };
 
     return `${head}
+    ${insightCard}
     <section class="two-col">
       <div class="card"><div class="card-title">Funil de status</div><div class="card-sub">Da abordagem à conversão · ${f.fora||0} marcadas "fora"</div>
         <div style="margin-top:16px">${funil}</div></div>
       <div class="card"><div class="card-title">Objeções mais comuns</div><div class="card-sub">O que mais te barra</div>
         <div style="margin-top:16px">${objs}</div></div>
     </section>
+    <section class="two-col even">
+      <div class="card"><div class="card-title">Sweet spot de álcool</div><div class="card-sub">Conversão por doses no rolê</div>
+        <div style="margin-top:16px">${barsTaxa(it.porAlcool)}</div></div>
+      <div class="card"><div class="card-title">Melhor dia da semana</div><div class="card-sub">Conversão por dia</div>
+        <div style="margin-top:16px">${barsTaxa(it.porDia, (r) => DOW_NOME[r.dow])}</div></div>
+    </section>
     <section class="two-col">
+      <div class="card"><div class="card-title">Objeção pesa quanto?</div><div class="card-sub">Conversão com vs sem obstáculo declarado</div>
+        <div style="margin-top:16px">${barsTaxa(comSemRows)}</div></div>
       <div class="card"><div class="card-title">Por cantada</div><div class="card-sub">Conversão e objeção de cada frase</div>
         <div style="margin-top:10px">${corte(it.porCantada, 'Cantada')}</div></div>
+    </section>
+    <section>
       <div class="card"><div class="card-title">Por local</div><div class="card-sub">Conversão e objeção de cada lugar</div>
         <div style="margin-top:10px">${corte(it.porLocal, 'Local')}</div></div>
     </section>`;
@@ -409,9 +501,17 @@
     }));
     root.querySelectorAll('[data-edit]').forEach((el) => el.addEventListener('click', () =>
       abrirModalLead(state.leads.find((l) => String(l.id) === el.getAttribute('data-edit')))));
-    root.querySelectorAll('[data-del]').forEach((el) => el.addEventListener('click', async () => {
+    root.querySelectorAll('[data-del]').forEach((el) => el.addEventListener('click', () => {
       if (!confirm('Excluir esta abordagem?')) return;
-      await api('/api/leads/' + el.getAttribute('data-del'), { method: 'DELETE' }); await recarregar(); render(); toast('Abordagem excluída');
+      comFeedback(() => api('/api/leads/' + el.getAttribute('data-del'), { method: 'DELETE' }), 'Abordagem excluída');
+    }));
+    // status inline: 1 toque cicla em conversa → convertida → fora → em conversa (vira convertida seta o lead time)
+    const CICLO = { em_conversa: 'convertida', convertida: 'fora', fora: 'em_conversa' };
+    root.querySelectorAll('[data-cyclestatus]').forEach((el) => el.addEventListener('click', () => {
+      const id = el.getAttribute('data-cyclestatus');
+      const lead = state.leads.find((l) => String(l.id) === id); if (!lead) return;
+      const novo = CICLO[lead.status] || 'em_conversa';
+      comFeedback(() => jpost('/api/leads/' + id, { status: novo }, 'PUT'), 'Status → ' + STATUS_LABEL[novo]);
     }));
     // álcool card
     const alcSel = root.querySelector('#alcool-role');
@@ -427,23 +527,23 @@
       abrirModalBebidas(Number(el.getAttribute('data-bebrole')))));
     root.querySelectorAll('[data-editrole]').forEach((el) => el.addEventListener('click', () =>
       abrirModalRole(state.roles.find((r) => String(r.id) === el.getAttribute('data-editrole')))));
-    root.querySelectorAll('[data-delrole]').forEach((el) => el.addEventListener('click', async () => {
+    root.querySelectorAll('[data-delrole]').forEach((el) => el.addEventListener('click', () => {
       if (!confirm('Excluir este rolê? Os leads e bebidas dele vão junto.')) return;
-      await api('/api/roles/' + el.getAttribute('data-delrole'), { method: 'DELETE' }); await recarregar(); render(); toast('Rolê excluído');
+      comFeedback(() => api('/api/roles/' + el.getAttribute('data-delrole'), { method: 'DELETE' }), 'Rolê excluído');
     }));
     // locais
     const addLocal = root.querySelector('#add-local'); if (addLocal) addLocal.addEventListener('click', () => abrirModalLocal(null));
     root.querySelectorAll('[data-editlocal]').forEach((el) => el.addEventListener('click', () =>
       abrirModalLocal({ id: el.getAttribute('data-editlocal'), nome: el.getAttribute('data-nome') })));
-    root.querySelectorAll('[data-dellocal]').forEach((el) => el.addEventListener('click', async () => {
+    root.querySelectorAll('[data-dellocal]').forEach((el) => el.addEventListener('click', () => {
       if (!confirm('Excluir este local? Os rolês nele ficam sem local.')) return;
-      await api('/api/locais/' + el.getAttribute('data-dellocal'), { method: 'DELETE' }); await recarregar(); render(); toast('Local excluído');
+      comFeedback(() => api('/api/locais/' + el.getAttribute('data-dellocal'), { method: 'DELETE' }), 'Local excluído');
     }));
     // cantadas
     const addC = root.querySelector('#add-cantada'); if (addC) addC.addEventListener('click', abrirModalCantada);
-    root.querySelectorAll('[data-delcantada]').forEach((el) => el.addEventListener('click', async () => {
+    root.querySelectorAll('[data-delcantada]').forEach((el) => el.addEventListener('click', () => {
       if (!confirm('Excluir esta cantada?')) return;
-      await api('/api/cantadas/' + el.getAttribute('data-delcantada'), { method: 'DELETE' }); await recarregar(); render(); toast('Cantada excluída');
+      comFeedback(() => api('/api/cantadas/' + el.getAttribute('data-delcantada'), { method: 'DELETE' }), 'Cantada excluída');
     }));
     // config
     const cfgSalvar = root.querySelector('#cfg-salvar');
@@ -453,18 +553,18 @@
         sexoSel = b.getAttribute('data-sexo');
         root.querySelectorAll('[data-sexo]').forEach((x) => x.classList.toggle('on', x === b));
       }));
-      cfgSalvar.addEventListener('click', async () => {
-        await jpost('/api/configuracoes', { peso_kg: Number($('#cfg-peso').value), sexo: sexoSel, meta_mes: Number($('#cfg-meta').value) }, 'PUT');
-        await recarregar(); render(); toast('Configurações salvas');
+      cfgSalvar.addEventListener('click', () => {
+        comFeedback(() => jpost('/api/configuracoes', { peso_kg: Number($('#cfg-peso').value), sexo: sexoSel, meta_mes: Number($('#cfg-meta').value) }, 'PUT'), 'Configurações salvas');
       });
     }
+    const emptyAdd = root.querySelector('#empty-add'); if (emptyAdd) emptyAdd.addEventListener('click', () => abrirModalLead(null));
     const addBebida = root.querySelector('#add-bebida'); if (addBebida) addBebida.addEventListener('click', () => abrirModalBebida(null));
     root.querySelectorAll('[data-editbebida]').forEach((el) => el.addEventListener('click', () =>
       abrirModalBebida(state.bebidas.find((b) => String(b.id) === el.getAttribute('data-editbebida')))));
-    root.querySelectorAll('[data-delbebida]').forEach((el) => el.addEventListener('click', async () => {
+    root.querySelectorAll('[data-delbebida]').forEach((el) => el.addEventListener('click', () => {
       if (!confirm('Excluir esta bebida do catálogo?')) return;
-      try { await api('/api/bebidas/' + el.getAttribute('data-delbebida'), { method: 'DELETE' }); await recarregar(); render(); toast('Bebida excluída'); }
-      catch (e) { toast(e.message === 'bebida_em_uso' ? 'Bebida já usada em rolês — não dá pra excluir.' : 'Erro: ' + e.message); }
+      comFeedback(() => api('/api/bebidas/' + el.getAttribute('data-delbebida'), { method: 'DELETE' }), 'Bebida excluída',
+        { bebida_em_uso: 'Bebida já usada em rolês — não dá pra excluir.' });
     }));
   }
 
@@ -596,7 +696,9 @@
     let fotoFile = null;
     const onFoto = async (file) => {
       if (!file) return;
-      prev.src = URL.createObjectURL(file); prev.classList.remove('hidden'); hint.classList.add('hidden');
+      const objUrl = URL.createObjectURL(file);
+      prev.onload = () => URL.revokeObjectURL(objUrl); // libera o blob após carregar (evita leak)
+      prev.src = objUrl; prev.classList.remove('hidden'); hint.classList.add('hidden');
       const dt = await window.lerHorarioDaFoto(file); // EXIF do arquivo ORIGINAL
       if (dt) { $('#f-momento').value = paraInputLocal(dt); $('#exif-note').textContent = '✓ Horário lido da foto (EXIF): ' + dt.toLocaleString('pt-BR'); }
       else { const lm = file.lastModified ? new Date(file.lastModified) : new Date(); $('#f-momento').value = paraInputLocal(lm); $('#exif-note').textContent = 'Foto sem EXIF — usei a data do arquivo. Ajuste se precisar.'; }
@@ -616,8 +718,8 @@
       fd.append('cantada_texto', $('#f-cantada').value.trim());
       fd.append('objecao', $('#f-objecao').value.trim());
       fd.append('status', $('#f-status').value);
-      // envia o horário inequívoco (ISO/UTC) — corrige o fuso independente do TZ do servidor
-      fd.append('momento', $('#f-momento').value ? new Date($('#f-momento').value).toISOString() : '');
+      // envia o horário inequívoco (ISO), interpretando o input como BRT — corrige o fuso ponta-a-ponta
+      fd.append('momento', momentoParaISO($('#f-momento').value));
       try {
         if (ed) await api('/api/leads/' + lead.id, { method: 'PUT', body: fd });
         else await api('/api/leads', { method: 'POST', body: fd });
@@ -738,5 +840,8 @@
   // ---------- BOOT ----------
   aplicarTema(temaAtual());
   renderInstall();
-  (async function boot() { try { await api('/api/me'); await iniciarApp(); } catch (e) { mostrarLogin(); } })();
+  (async function boot() {
+    try { await api('/api/me'); } catch (e) { mostrarLogin(); return; } // só 401 aqui derruba pro login
+    try { await iniciarApp(); } catch (e) { toast('Falha ao carregar. Tente recarregar.'); }
+  })();
 })();
