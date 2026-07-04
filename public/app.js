@@ -26,7 +26,12 @@
     api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
   // ---------- TEMA / TOAST ----------
-  const aplicarTema = (t) => { document.documentElement.setAttribute('data-theme', t); try { localStorage.setItem('cupido-theme', t); } catch (e) {} };
+  const aplicarTema = (t) => {
+    document.documentElement.setAttribute('data-theme', t);
+    const meta = document.querySelector('meta[name="theme-color"]'); // barra de status integra com o tema
+    if (meta) meta.setAttribute('content', t === 'dark' ? '#151011' : '#f4f1f0');
+    try { localStorage.setItem('cupido-theme', t); } catch (e) {}
+  };
   const temaAtual = () => { try { return localStorage.getItem('cupido-theme') || 'light'; } catch (e) { return 'light'; } };
   let toastT;
   function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove('show'), 2400); }
@@ -89,9 +94,12 @@
 
   // ---------- NAV ----------
   document.querySelectorAll('.nav-item[data-view]').forEach((btn) => btn.addEventListener('click', () => {
-    state.view = btn.getAttribute('data-view');
-    document.querySelectorAll('.nav-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
-    render();
+    const trocar = () => {
+      state.view = btn.getAttribute('data-view');
+      document.querySelectorAll('.nav-item[data-view]').forEach((b) => b.classList.toggle('active', b === btn));
+      render();
+    };
+    if (document.startViewTransition) document.startViewTransition(trocar); else trocar(); // cross-fade estilo app
   }));
   $('#theme-toggle').addEventListener('click', () => aplicarTema(temaAtual() === 'light' ? 'dark' : 'light'));
   $('#search').addEventListener('input', (e) => { state.busca = e.target.value.trim().toLowerCase(); if (state.view === 'leads' || state.view === 'conversoes') render(); });

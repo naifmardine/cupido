@@ -1,7 +1,15 @@
 /* Cupido — estilos (tokens de tema portados do design) */
 *{box-sizing:border-box}
-html,body{margin:0;overflow-x:hidden;max-width:100%}
-body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased}
+html,body{margin:0;overflow-x:hidden;max-width:100%;overscroll-behavior-y:none}
+body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+/* sensação de app: seleção só em campos e valores de texto */
+input,textarea,select,[contenteditable],.cantada-txt,table.leads td{-webkit-user-select:text;user-select:text}
+/* feedback tátil: elementos interativos "afundam" ao tocar */
+.nav-item,.btn,.mini-btn,.round-btn,.icon-btn,.fab,.kpi,.drink-chip .round-btn{transition:transform .06s ease}
+.nav-item:active,.btn:active,.mini-btn:active,.round-btn:active,.icon-btn:active{transform:scale(.95)}
+/* transição de troca de aba (View Transitions API) */
+::view-transition-old(root),::view-transition-new(root){animation-duration:.18s}
 
 :root,[data-theme="light"]{
 --bg:#f4f1f0;--card:#ffffff;--card-2:#faf7f6;--text:#1c1512;--text-2:#6f635d;--text-3:#a99e98;
