@@ -648,7 +648,31 @@
     });
   }
 
+  // ---------- INSTALAR COMO APP (PWA) ----------
+  let promptInstalar = null;
+  const ehStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  const ehIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+  function renderInstall() {
+    const el = $('#install-cta'); if (!el) return;
+    if (ehStandalone()) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+    if (promptInstalar) {
+      el.innerHTML = '<button type="button" class="btn btn-ghost" id="btn-instalar">⤓ Instalar como app</button>';
+      $('#btn-instalar').onclick = async () => {
+        promptInstalar.prompt();
+        try { await promptInstalar.userChoice; } catch (e) {}
+        promptInstalar = null; renderInstall();
+      };
+      el.classList.remove('hidden');
+    } else if (ehIOS()) {
+      el.innerHTML = '<div class="install-ios">Pra usar como app: toque em <b>Compartilhar</b> e em <b>“Adicionar à Tela de Início”</b>.</div>';
+      el.classList.remove('hidden');
+    } else { el.classList.add('hidden'); el.innerHTML = ''; }
+  }
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); promptInstalar = e; renderInstall(); });
+  window.addEventListener('appinstalled', () => { promptInstalar = null; renderInstall(); });
+
   // ---------- BOOT ----------
   aplicarTema(temaAtual());
+  renderInstall();
   (async function boot() { try { await api('/api/me'); await iniciarApp(); } catch (e) { mostrarLogin(); } })();
 })();
